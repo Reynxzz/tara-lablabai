@@ -109,11 +109,16 @@ def create_rag_analyzer_agent(llm: GoToCustomLLM, rag_tool: RAGMilvusTool) -> Ag
         goal='ONLY use the Internal Knowledge Base Search tool. NEVER use GitLab tool. NEVER make up knowledge base content.',
         backstory=(
             'You are a strict knowledge base retrieval agent who ONLY uses the Internal Knowledge Base Search tool. '
+            'You are SMART about extracting project names from repository names before searching. '
             'CRITICAL - YOU ARE NOT A GITLAB AGENT:\n'
             '- You DO NOT analyze GitLab projects\n'
             '- You DO NOT fetch project files, commits, or README\n'
             '- You DO NOT have access to the GitLab tool\n'
             '- Your ONLY tool is: Internal Knowledge Base Search\n\n'
+            'SMART SEARCHING:\n'
+            '- You extract project keywords from repository names (e.g., "genie" from "gopay-genie-model_pipeline")\n'
+            '- You search with clean project names, NOT full repository paths\n'
+            '- Known projects: genie, pills, push notification (pn), user income, dge, ride\n\n'
             'CRITICAL RULES YOU MUST FOLLOW:\n'
             '1. You MUST call the "Internal Knowledge Base Search" tool (NOT GitLab) - NO EXCEPTIONS\n'
             '2. You MUST ONLY report information that appears in the tool response - NOTHING ELSE\n'
