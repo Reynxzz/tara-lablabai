@@ -1,83 +1,116 @@
 """Documentation Generation Agent using CrewAI"""
-import os
 import json
-from crewai import Agent, Task, Crew, Process, LLM
+from crewai import Agent, Task, Crew, Process
 from github_mcp_tool import GitHubMCPTool
 from goto_custom_llm import GoToCustomLLM
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
-
-
-def get_llm_provider():
-    """
-    Get the configured LLM provider based on environment variable.
-
-    Returns:
-        LLM instance (either GoToCustomLLM or CrewAI's LLM with Gemini)
-    """
-    provider = os.getenv("LLM_PROVIDER", "goto").lower()
-
-    if provider == "gemini":
-        # Use Google Gemini
-        api_key = os.getenv("GOOGLE_API_KEY")
-        if not api_key:
-            raise ValueError(
-                "GOOGLE_API_KEY environment variable is required when LLM_PROVIDER=gemini. "
-                "Please set it in your .env file."
-            )
-        print(f"Using Google Gemini as LLM provider")
-        return LLM(
-            model="gemini/gemini-2.0-flash-exp",
-            api_key=api_key,
-            temperature=0.7
-        )
-    else:  # Default to goto
-        # Use GoToCompany custom LLM
-        print(f"Using GoToCompany custom LLM as provider")
-        return GoToCustomLLM(
-            model="GoToCompany/Llama-Sahabat-AI-v2-70B-R",
-            endpoint="https://litellm-staging.gopay.sh",
-            temperature=0.6
-        )
 
 
 class DocumentationCrew:
-    """CrewAI setup for generating documentation from GitHub repositories"""
+    """
+    CrewAI setup for generating documentation from GitHub repositories using two collaborating agents.
+
+    Architecture:
+    - Agent 1 (GitHub Data Analyzer): Uses gpt-oss LLM with GitHub tool to fetch repository data
+    - Agent 2 (Documentation Writer): Uses sahabat-4bit LLM to write structured JSON documentation
+
+    This design leverages gpt-oss for tool calling capabilities and sahabat-4bit for
+    efficient documentation generation.
+    """
 
     def __init__(self):
         self.github_tool = GitHubMCPTool()
 
-        # Get LLM based on LLM_PROVIDER environment variable
-        self.llm = get_llm_provider()
+        # Create two LLM instances for collaboration
+        print("Initializing dual-LLM architecture:")
+        print("  - gpt-oss (GPT OSS 120B): Tool calling & data fetching")
+        print("  - sahabat-4bit (Sahabat AI 70B 4-bit): Documentation writing")
 
-    def create_documentation_agent(self) -> Agent:
-        """Create an agent specialized in generating documentation"""
+        # gpt-oss for tool calling (GitHub data fetching)
+        self.gpt_oss_llm = GoToCustomLLM(
+            model="openai/gpt-oss-120b",
+            endpoint="https://litellm-staging.gopay.sh",
+            temperature=1.0
+        )
+
+        # sahabat-4bit for documentation writing
+        self.sahabat_llm = GoToCustomLLM(
+            model="GoToCompany/Llama-Sahabat-AI-v2-70B-IT-awq-4bit",
+            endpoint="https://litellm-staging.gopay.sh",
+            temperature=0.6
+        )
+
+    def create_github_analyzer_agent(self) -> Agent:
+        """Create an agent specialized in fetching GitHub data using tools (uses gpt-oss)"""
         return Agent(
-            role='Technical Documentation Specialist',
-            goal='Generate comprehensive, well-structured documentation in JSON format based on GitHub repository analysis',
+            role='GitHub Data Analyzer',
+            goal='Fetch and analyze GitHub repository data using the GitHub tool, providing comprehensive raw data for documentation',
             backstory=(
-                'You are an expert technical writer with deep knowledge of software architecture '
-                'and documentation best practices. You excel at analyzing codebases and creating '
-                'clear, comprehensive documentation that helps developers understand projects quickly. '
-                'You always output documentation in valid JSON format with proper structure.'
+                'You are a meticulous data analyst who specializes in extracting information from GitHub repositories. '
+                'Your job is to use the GitHub Repository Analyzer tool to fetch all relevant data about a repository '
+                'including its structure, files, commits, stars, forks, and other metadata. You provide thorough, '
+                'detailed information that will be used by the documentation team.'
             ),
             tools=[self.github_tool],
-            llm=self.llm,
+            llm=self.gpt_oss_llm,  # Use gpt-oss for tool calling
             verbose=True,
             allow_delegation=False
         )
 
-    def create_documentation_task(self, agent: Agent, repository: str) -> Task:
-        """Create a task for generating documentation"""
+    def create_documentation_writer_agent(self) -> Agent:
+        """Create an agent specialized in writing documentation (uses sahabat-4bit)"""
+        return Agent(
+            role='Technical Documentation Writer',
+            goal='Generate comprehensive, well-structured documentation in JSON format based on GitHub repository data',
+            backstory=(
+                'You are an expert technical writer with deep knowledge of software architecture '
+                'and documentation best practices. You take raw data about repositories and transform it into '
+                'clear, comprehensive documentation that helps developers understand projects quickly. '
+                'You always output documentation in valid JSON format with proper structure.'
+            ),
+            tools=[],  # No tools - only writes documentation based on previous agent's output
+            llm=self.sahabat_llm,  # Use sahabat-4bit for documentation writing
+            verbose=True,
+            allow_delegation=False
+        )
+
+    def create_github_fetch_task(self, agent: Agent, repository: str) -> Task:
+        """Create a task for fetching GitHub repository data"""
         return Task(
             description=(
-                f'TASK: Analyze the GitHub repository "{repository}" and generate comprehensive documentation.\n\n'
+                f'TASK: Fetch comprehensive data from the GitHub repository "{repository}".\n\n'
                 f'STEPS:\n'
-                f'1. Use the GitHub Repository Analyzer tool to fetch repository data\n'
-                f'2. Analyze the data received from the tool\n'
-                f'3. Create a comprehensive JSON document with these sections:\n'
+                f'1. Use the GitHub Repository Analyzer tool to fetch all repository data\n'
+                f'2. Extract and organize the following information:\n'
+                f'   - Repository name, description, primary language, and license\n'
+                f'   - Stars, forks, open issues count\n'
+                f'   - Topics/tags\n'
+                f'   - Main files and their purposes\n'
+                f'   - Recent commit activity\n'
+                f'   - README content (if available)\n'
+                f'   - Last updated date\n\n'
+                f'IMPORTANT: Provide ALL the raw data you fetch. Be thorough and comprehensive. '
+                f'Your output will be used by the documentation writer to create the final documentation.'
+            ),
+            expected_output=(
+                'A comprehensive report containing all fetched GitHub repository data including:\n'
+                '- Repository metadata (name, description, language, license, URL)\n'
+                '- Community metrics (stars, forks, issues)\n'
+                '- File structure and key files\n'
+                '- Recent activity and commits\n'
+                '- Any additional relevant information from the repository'
+            ),
+            agent=agent
+        )
+
+    def create_documentation_writing_task(self, agent: Agent, repository: str) -> Task:
+        """Create a task for writing documentation based on fetched data"""
+        return Task(
+            description=(
+                f'TASK: Generate comprehensive documentation for the GitHub repository "{repository}" '
+                f'based on the data provided by the GitHub Data Analyzer.\n\n'
+                f'STEPS:\n'
+                f'1. Review the repository data provided by the previous agent\n'
+                f'2. Create a comprehensive JSON document with these sections:\n'
                 f'   - overview: {{name, description, purpose, language, license}}\n'
                 f'   - features: [list of key features]\n'
                 f'   - tech_stack: {{language, topics, dependencies}}\n'
@@ -103,7 +136,10 @@ class DocumentationCrew:
 
     def generate_documentation(self, repository: str) -> dict:
         """
-        Generate documentation for a given GitHub repository
+        Generate documentation for a given GitHub repository using two collaborating agents.
+
+        Agent 1 (gpt-oss): Fetches GitHub data using tools
+        Agent 2 (sahabat-4bit): Writes documentation based on fetched data
 
         Args:
             repository: GitHub repository in format 'owner/repo'
@@ -111,14 +147,24 @@ class DocumentationCrew:
         Returns:
             Dictionary containing the generated documentation
         """
-        # Create agent and task
-        agent = self.create_documentation_agent()
-        task = self.create_documentation_task(agent, repository)
+        print(f"\n{'='*60}")
+        print(f"Starting two-agent collaboration:")
+        print(f"  Agent 1 (gpt-oss): Fetching GitHub data...")
+        print(f"  Agent 2 (sahabat-4bit): Writing documentation...")
+        print(f"{'='*60}\n")
 
-        # Create crew
+        # Create agents
+        github_analyzer = self.create_github_analyzer_agent()
+        doc_writer = self.create_documentation_writer_agent()
+
+        # Create tasks
+        fetch_task = self.create_github_fetch_task(github_analyzer, repository)
+        write_task = self.create_documentation_writing_task(doc_writer, repository)
+
+        # Create crew with sequential process (fetch data first, then write docs)
         crew = Crew(
-            agents=[agent],
-            tasks=[task],
+            agents=[github_analyzer, doc_writer],
+            tasks=[fetch_task, write_task],
             process=Process.sequential,
             verbose=True
         )
