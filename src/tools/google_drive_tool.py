@@ -1,11 +1,15 @@
-"""Google Drive MCP Tool for CrewAI"""
-import os
+"""Google Drive MCP Tool for CrewAI - Searches and retrieves Google Drive documents"""
 import json
-import asyncio
 import requests
-from typing import Any, Dict, Type, List
+from typing import Any, Dict, List, Type
 from pydantic import BaseModel, Field
 from crewai.tools import BaseTool
+
+from src.config.settings import get_settings
+from src.config.constants import DEFAULT_DRIVE_TOP_K
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 
 class GoogleDriveMCPToolSchema(BaseModel):
@@ -14,6 +18,12 @@ class GoogleDriveMCPToolSchema(BaseModel):
 
 
 class GoogleDriveMCPTool(BaseTool):
+    """
+    Tool for searching and retrieving documents from Google Drive.
+
+    Uses MCP (Model Context Protocol) server to interface with Google Drive API.
+    """
+
     name: str = "Google Drive Document Analyzer"
     description: str = (
         "Searches for and retrieves documents from Google Drive. "
@@ -22,34 +32,52 @@ class GoogleDriveMCPTool(BaseTool):
     )
     args_schema: Type[BaseModel] = GoogleDriveMCPToolSchema
 
-    def __init__(self, access_token: str = None, user_id: str = None, mcp_url: str = None, **kwargs):
+    # Pydantic fields
+    mcp_url: str = ""
+    access_token: str = ""
+    top_k: int = DEFAULT_DRIVE_TOP_K
+
+    class Config:
+        arbitrary_types_allowed = True
+
+    def __init__(self, access_token: str = None, mcp_url: str = None, **kwargs):
         """
         Initialize Google Drive MCP tool.
 
         Args:
-            access_token: Google Drive access token
-            user_id: User identifier
-            mcp_url: MCP server URL (defaults to MCP_DRIVE_URL env var or http://localhost:9000)
+            access_token: Google Drive access token (optional, reads from settings if not provided)
+            mcp_url: MCP server URL (optional, reads from settings if not provided)
         """
-        super().__init__(**kwargs)
-        self._access_token = access_token or os.getenv("GOOGLE_DRIVE_TOKEN")
-        self._user_id = user_id or os.getenv("GOOGLE_DRIVE_USER_ID", "default")
-        self._mcp_url = mcp_url or os.getenv("MCP_DRIVE_URL", "http://localhost:9000")
-        self._initialized = False
+        settings = get_settings()
 
-        if self._access_token:
+        # Use provided values or fallback to settings
+        token = access_token or settings.google_drive.token
+        url = mcp_url or settings.google_drive.mcp_url
+
+        # Ensure URL has proper protocol
+        if url and not url.startswith('http'):
+            url = f'https://{url}'
+
+        super().__init__(
+            mcp_url=url,
+            access_token=token or "",
+            **kwargs
+        )
+
+        # Verify MCP server is reachable
+        object.__setattr__(self, '_initialized', False)
+        if self.access_token:
             self._initialize_mcp()
 
     def _initialize_mcp(self):
         """Verify MCP server is reachable."""
-        if not self._access_token:
-            print("Warning: No Google Drive access token provided - MCP tools disabled")
-            self._initialized = False
+        if not self.access_token:
+            logger.warning("No Google Drive access token provided - MCP tools disabled")
             return
 
         try:
             response = requests.post(
-                self._mcp_url,
+                self.mcp_url,
                 json={
                     "jsonrpc": "2.0",
                     "id": 0,
@@ -58,18 +86,16 @@ class GoogleDriveMCPTool(BaseTool):
                 timeout=5
             )
             if response.status_code == 200:
-                print(f"✅ MCP Drive server reachable at {self._mcp_url}")
-                self._initialized = True
+                logger.info(f"MCP Drive server reachable at {self.mcp_url}")
+                object.__setattr__(self, '_initialized', True)
             else:
-                print(f"Warning: MCP server returned status {response.status_code}")
-                self._initialized = False
+                logger.warning(f"MCP server returned status {response.status_code}")
         except requests.exceptions.RequestException as e:
-            print(f"Warning: MCP server not reachable at {self._mcp_url}: {e}")
-            self._initialized = False
+            logger.warning(f"MCP server not reachable at {self.mcp_url}: {e}")
 
     def is_available(self) -> bool:
         """Check if MCP tools are available."""
-        return self._initialized
+        return getattr(self, '_initialized', False)
 
     def _run(self, query: str) -> str:
         """
@@ -82,35 +108,43 @@ class GoogleDriveMCPTool(BaseTool):
             JSON string with search results and file contents
         """
         if not self.is_available():
-            return json.dumps({"error": "Google Drive MCP tools not available. Check access token and MCP server."})
+            error_msg = "Google Drive MCP tools not available. Check access token and MCP server."
+            logger.error(error_msg)
+            return json.dumps({"error": error_msg})
 
         try:
+            logger.info(f"Searching Google Drive for: {query}")
+
             # Search for files
             files = self._search_files(query)
 
             if not files:
+                logger.info(f"No files found matching '{query}'")
                 return json.dumps({
                     "query": query,
                     "files_found": 0,
                     "message": f"No files found matching '{query}'"
                 })
 
-            # Get content of first few files (limit to 3 to avoid overload)
+            # Get content of first few files (limit to prevent overload)
             results = []
-            for file_info in files[:3]:
+            for file_info in files[:self.top_k]:
                 file_uri = file_info.get("uri")
                 file_name = file_info.get("name")
 
                 if file_uri:
+                    logger.debug(f"Retrieving file: {file_name}")
                     file_content = self._get_file(file_uri)
+                    content = file_content.get("content", "")
                     results.append({
                         "name": file_name,
                         "uri": file_uri,
                         "mimeType": file_info.get("mimeType", ""),
-                        "content": file_content.get("content", "")[:2000],  # Limit content to first 2000 chars
-                        "full_content_length": len(file_content.get("content", ""))
+                        "content": content[:2000],  # Limit to first 2000 chars
+                        "full_content_length": len(content)
                     })
 
+            logger.info(f"Retrieved {len(results)} files from Google Drive")
             return json.dumps({
                 "query": query,
                 "files_found": len(files),
@@ -119,7 +153,9 @@ class GoogleDriveMCPTool(BaseTool):
             }, indent=2)
 
         except Exception as e:
-            return json.dumps({"error": str(e)})
+            error_msg = f"Error searching Google Drive: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            return json.dumps({"error": error_msg})
 
     def _search_files(self, query: str) -> List[Dict[str, str]]:
         """
@@ -140,26 +176,26 @@ class GoogleDriveMCPTool(BaseTool):
                     "name": "search",
                     "arguments": {
                         "query": query,
-                        "access_token": self._access_token
+                        "access_token": self.access_token
                     }
                 }
             }
 
             response = requests.post(
-                self._mcp_url,
+                self.mcp_url,
                 json=request_data,
                 headers={"Content-Type": "application/json"},
                 timeout=90
             )
 
             if response.status_code != 200:
-                print(f"Failed to search Drive: HTTP {response.status_code}")
+                logger.error(f"Failed to search Drive: HTTP {response.status_code}")
                 return []
 
             json_response = response.json()
 
             if "error" in json_response:
-                print(f"MCP server returned error: {json_response['error']}")
+                logger.error(f"MCP server returned error: {json_response['error']}")
                 return []
 
             if "result" not in json_response:
@@ -174,13 +210,14 @@ class GoogleDriveMCPTool(BaseTool):
             try:
                 search_data = json.loads(text)
                 files = search_data.get("files", [])
-                print(f"✅ Found {len(files)} files matching '{query}'")
+                logger.info(f"Found {len(files)} files matching '{query}'")
                 return files
             except json.JSONDecodeError:
+                logger.error("Failed to parse search results as JSON")
                 return []
 
-        except Exception as e:
-            print(f"Drive search failed: {e}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Drive search request failed: {e}")
             return []
 
     def _get_file(self, uri: str) -> Dict[str, Any]:
@@ -202,26 +239,26 @@ class GoogleDriveMCPTool(BaseTool):
                     "name": "get_file",
                     "arguments": {
                         "uri": uri,
-                        "access_token": self._access_token
+                        "access_token": self.access_token
                     }
                 }
             }
 
             response = requests.post(
-                self._mcp_url,
+                self.mcp_url,
                 json=request_data,
                 headers={"Content-Type": "application/json"},
                 timeout=180
             )
 
             if response.status_code != 200:
-                print(f"Failed to get file: HTTP {response.status_code}")
+                logger.error(f"Failed to get file: HTTP {response.status_code}")
                 return {}
 
             json_response = response.json()
 
             if "error" in json_response:
-                print(f"MCP server returned error: {json_response['error']}")
+                logger.error(f"MCP server returned error: {json_response['error']}")
                 return {}
 
             if "result" not in json_response:
@@ -237,8 +274,9 @@ class GoogleDriveMCPTool(BaseTool):
                 file_data = json.loads(text)
                 return file_data
             except json.JSONDecodeError:
+                logger.error("Failed to parse file data as JSON")
                 return {}
 
-        except Exception as e:
-            print(f"Drive get_file failed: {e}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Drive get_file request failed: {e}")
             return {}

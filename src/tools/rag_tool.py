@@ -2,11 +2,22 @@
 import os
 import json
 import requests
-from typing import Any, Dict, Type, List
+from typing import Any, Dict, List, Type
 from pydantic import BaseModel, Field
 from crewai.tools import BaseTool
 from pymilvus import MilvusClient
 from rapidfuzz import fuzz
+
+from src.config.settings import get_settings
+from src.config.constants import (
+    RAG_COLLECTION_DISPLAY_NAMES,
+    RAG_COLLECTION_INTERNAL_NAMES,
+    DEFAULT_RAG_TOP_K,
+    DEFAULT_EMBEDDING_TIMEOUT
+)
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 
 class RAGMilvusToolSchema(BaseModel):
@@ -15,6 +26,13 @@ class RAGMilvusToolSchema(BaseModel):
 
 
 class RAGMilvusTool(BaseTool):
+    """
+    Tool for searching internal knowledge base using semantic search.
+
+    Uses Milvus vector database for similarity search across multiple collections
+    including user income, DGE, Genie, and other internal documentation.
+    """
+
     name: str = "Internal Knowledge Base Search"
     description: str = (
         "Searches the internal knowledge base using semantic search. "
@@ -25,60 +43,48 @@ class RAGMilvusTool(BaseTool):
     args_schema: Type[BaseModel] = RAGMilvusToolSchema
 
     # Pydantic fields for configuration
-    db_path: str = "./milvus_demo_batch_bmth_v1.db"
-    model_name: str = "google/embeddinggemma-300m"
-    embedding_endpoint: str = "https://litellm-staging.gopay.sh/embeddings"
-    top_k: int = 5
+    db_path: str = ""
+    model_name: str = ""
+    embedding_endpoint: str = ""
+    top_k: int = DEFAULT_RAG_TOP_K
 
     class Config:
         arbitrary_types_allowed = True
 
-    # Collection name mappings (class variables)
-    col_name_list: List[str] = [
-        "USER INCOME",
-        "USER OCCUPATION",
-        "DGE",
-        "GENIE",
-        "PN - PUSH NOTIFICATIONS",
-        "PILLS"
-    ]
-
-    lower_col_name_list: List[str] = [
-        "user_income",
-        "user_occupation",
-        "dge",
-        "genie",
-        "pn_push_notifications",
-        "pills"
-    ]
-
     def __init__(
         self,
-        db_path: str = "./milvus_demo_batch_bmth_v1.db",
-        model_name: str = "google/embeddinggemma-300m",
-        embedding_endpoint: str = "https://litellm-staging.gopay.sh/embeddings",
-        top_k: int = 5,
+        db_path: str = None,
+        model_name: str = None,
+        embedding_endpoint: str = None,
+        top_k: int = None,
         **kwargs
     ):
         """
         Initialize RAG Milvus tool.
 
         Args:
-            db_path: Path to the Milvus database file
-            model_name: Embedding model name
-            embedding_endpoint: URL for embedding generation
-            top_k: Number of top results to return
+            db_path: Path to Milvus database file (optional, reads from settings)
+            model_name: Embedding model name (optional, reads from settings)
+            embedding_endpoint: URL for embedding generation (optional, reads from settings)
+            top_k: Number of top results to return (optional, default from settings)
         """
+        settings = get_settings()
+
+        # Use provided values or fallback to settings
         super().__init__(
-            db_path=db_path,
-            model_name=model_name,
-            embedding_endpoint=embedding_endpoint,
-            top_k=top_k,
+            db_path=db_path or settings.rag.db_path,
+            model_name=model_name or settings.rag.embedding_model,
+            embedding_endpoint=embedding_endpoint or settings.rag.embedding_endpoint,
+            top_k=top_k or settings.rag.top_k,
             **kwargs
         )
 
         # Create class mapping dictionary (store as instance attribute)
-        object.__setattr__(self, '_class_mapping_dict', dict(zip(self.col_name_list, self.lower_col_name_list)))
+        object.__setattr__(
+            self,
+            '_class_mapping_dict',
+            dict(zip(RAG_COLLECTION_DISPLAY_NAMES, RAG_COLLECTION_INTERNAL_NAMES))
+        )
         object.__setattr__(self, '_initialized', False)
         object.__setattr__(self, '_client', None)
 
@@ -89,17 +95,15 @@ class RAGMilvusTool(BaseTool):
         """Initialize Milvus client and verify database exists."""
         try:
             if not os.path.exists(self.db_path):
-                print(f"Warning: Milvus database not found at {self.db_path}")
-                object.__setattr__(self, '_initialized', False)
+                logger.warning(f"Milvus database not found at {self.db_path}")
                 return
 
             client = MilvusClient(self.db_path)
             object.__setattr__(self, '_client', client)
-            print(f"✅ RAG Milvus client initialized with database: {self.db_path}")
+            logger.info(f"RAG Milvus client initialized with database: {self.db_path}")
             object.__setattr__(self, '_initialized', True)
         except Exception as e:
-            print(f"Warning: Failed to initialize Milvus client: {e}")
-            object.__setattr__(self, '_initialized', False)
+            logger.error(f"Failed to initialize Milvus client: {e}")
 
     def is_available(self) -> bool:
         """Check if RAG tool is available."""
@@ -119,7 +123,7 @@ class RAGMilvusTool(BaseTool):
         query_words = query.split()
         final_results = []
 
-        for item in self.col_name_list:
+        for item in RAG_COLLECTION_DISPLAY_NAMES:
             # Compute partial_ratio for full query
             full_score = fuzz.partial_ratio(query, item)
 
@@ -137,7 +141,10 @@ class RAGMilvusTool(BaseTool):
         # Return the mapped collection name
         top_item = final_results[0][0]
         class_mapping = getattr(self, '_class_mapping_dict', {})
-        return class_mapping[top_item]
+        mapped_name = class_mapping[top_item]
+
+        logger.debug(f"Mapped query to collection: {mapped_name} (score: {final_results[0][1]})")
+        return mapped_name
 
     def _generate_embedding(self, text: str) -> List[float]:
         """
@@ -160,16 +167,21 @@ class RAGMilvusTool(BaseTool):
         headers = {"Content-Type": "application/json"}
 
         try:
+            logger.debug(f"Generating embedding for query: {text[:50]}...")
             response = requests.post(
                 self.embedding_endpoint,
                 json=payload,
                 headers=headers,
-                timeout=30
+                timeout=DEFAULT_EMBEDDING_TIMEOUT
             )
             response.raise_for_status()
-            return response.json()["data"][0]["embedding"]
+            embedding = response.json()["data"][0]["embedding"]
+            logger.debug(f"Successfully generated embedding: {len(embedding)} dimensions")
+            return embedding
         except Exception as e:
-            raise RuntimeError(f"Failed to generate embedding: {str(e)}")
+            error_msg = f"Failed to generate embedding: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
 
     def _run(self, query: str) -> str:
         """
@@ -182,14 +194,16 @@ class RAGMilvusTool(BaseTool):
             JSON string with search results
         """
         if not self.is_available():
-            return json.dumps({
-                "error": "RAG Milvus tool not available. Check database path and initialization."
-            })
+            error_msg = "RAG Milvus tool not available. Check database path and initialization."
+            logger.error(error_msg)
+            return json.dumps({"error": error_msg})
 
         try:
+            logger.info(f"Searching knowledge base for: {query}")
+
             # Map query to collection
             collection_name = self._mapping_group(query)
-            print(f"📚 Searching collection: {collection_name}")
+            logger.info(f"Searching collection: {collection_name}")
 
             # Generate embedding for query
             query_vector = self._generate_embedding(query)
@@ -215,6 +229,7 @@ class RAGMilvusTool(BaseTool):
                     "collection": collection_name
                 })
 
+            logger.info(f"Found {len(results)} results in collection {collection_name}")
             return json.dumps({
                 "query": query,
                 "collection_searched": collection_name,
@@ -223,7 +238,9 @@ class RAGMilvusTool(BaseTool):
             }, indent=2)
 
         except Exception as e:
+            error_msg = f"Error searching knowledge base: {str(e)}"
+            logger.error(error_msg, exc_info=True)
             return json.dumps({
-                "error": str(e),
+                "error": error_msg,
                 "query": query
             })

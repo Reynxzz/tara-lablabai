@@ -1,7 +1,11 @@
-"""Custom LLM for GoToCompany's LiteLLM endpoint using CrewAI's BaseLLM"""
+"""Custom LLM implementation for GoToCompany's LiteLLM endpoint"""
 import requests
 from typing import Any, List, Optional, Union, Dict
 from crewai.llm import BaseLLM
+
+from src.utils.logger import setup_logger
+
+logger = setup_logger(__name__)
 
 
 class GoToCustomLLM(BaseLLM):
@@ -14,8 +18,8 @@ class GoToCustomLLM(BaseLLM):
 
     def __init__(
         self,
-        model: str = "GoToCompany/Llama-Sahabat-AI-v2-70B-R",
-        endpoint: str = "https://litellm-staging.gopay.sh",
+        model: str,
+        endpoint: str,
         temperature: float = 0.6,
         max_tokens: Optional[int] = None,
         timeout: int = 300,
@@ -32,13 +36,17 @@ class GoToCustomLLM(BaseLLM):
             timeout: Request timeout in seconds
             supports_tools: Whether this model supports function/tool calling
         """
-        # Must call super().__init__() with required parameters
         super().__init__(model=model, temperature=temperature)
 
         self.endpoint = endpoint.rstrip('/')
         self.max_tokens = max_tokens
         self.timeout = timeout
         self._supports_tools = supports_tools
+
+        logger.info(
+            f"Initialized GoToCustomLLM: model={model}, "
+            f"endpoint={endpoint}, supports_tools={supports_tools}"
+        )
 
     def call(
         self,
@@ -83,11 +91,10 @@ class GoToCustomLLM(BaseLLM):
             payload["stop"] = kwargs["stop"]
 
         # Make the request WITHOUT authorization header
-        headers = {
-            "Content-Type": "application/json"
-        }
+        headers = {"Content-Type": "application/json"}
 
         try:
+            logger.debug(f"Calling LLM endpoint: {self.endpoint}/chat/completions")
             response = requests.post(
                 f"{self.endpoint}/chat/completions",
                 headers=headers,
@@ -97,14 +104,25 @@ class GoToCustomLLM(BaseLLM):
             response.raise_for_status()
 
             result = response.json()
-            return result["choices"][0]["message"]["content"]
+            content = result["choices"][0]["message"]["content"]
 
-        except requests.exceptions.Timeout:
-            raise RuntimeError(f"Request to {self.endpoint} timed out after {self.timeout}s")
+            logger.debug(f"LLM response received: {len(content)} characters")
+            return content
+
+        except requests.exceptions.Timeout as e:
+            error_msg = f"Request to {self.endpoint} timed out after {self.timeout}s"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+
         except requests.exceptions.RequestException as e:
-            raise RuntimeError(f"Error calling GoToCompany LLM endpoint: {str(e)}")
+            error_msg = f"Error calling GoToCompany LLM endpoint: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
+
         except (KeyError, IndexError) as e:
-            raise RuntimeError(f"Unexpected response format from endpoint: {str(e)}")
+            error_msg = f"Unexpected response format from endpoint: {str(e)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg) from e
 
     def supports_function_calling(self) -> bool:
         """Indicate whether this LLM supports function/tool calling."""
@@ -116,4 +134,44 @@ class GoToCustomLLM(BaseLLM):
 
     def get_context_window_size(self) -> int:
         """Return the context window size for this model."""
-        return 8192  # Adjust based on your model's actual context window
+        return 8192
+
+
+def create_tool_calling_llm(endpoint: str, model: str, temperature: float = 0.3) -> GoToCustomLLM:
+    """
+    Factory function to create an LLM instance configured for tool calling.
+
+    Args:
+        endpoint: LLM endpoint URL
+        model: Model name
+        temperature: Temperature (default: 0.3 for deterministic tool calling)
+
+    Returns:
+        Configured GoToCustomLLM instance
+    """
+    return GoToCustomLLM(
+        model=model,
+        endpoint=endpoint,
+        temperature=temperature,
+        supports_tools=True
+    )
+
+
+def create_writing_llm(endpoint: str, model: str, temperature: float = 0.6) -> GoToCustomLLM:
+    """
+    Factory function to create an LLM instance configured for content writing.
+
+    Args:
+        endpoint: LLM endpoint URL
+        model: Model name
+        temperature: Temperature (default: 0.6 for creative writing)
+
+    Returns:
+        Configured GoToCustomLLM instance
+    """
+    return GoToCustomLLM(
+        model=model,
+        endpoint=endpoint,
+        temperature=temperature,
+        supports_tools=False
+    )
