@@ -1,4 +1,4 @@
-"""Streamlit web interface for GitLab Documentation Generator"""
+"""Streamlit web interface for NoBuddy - Documentation Generator"""
 import streamlit as st
 import sys
 import os
@@ -132,62 +132,87 @@ def verify_gitlab_token(gitlab_token: str, gitlab_url: str) -> bool:
 
 # Page configuration
 st.set_page_config(
-    page_title="GitLab Documentation Generator",
-    page_icon="📚",
+    page_title="NoBuddy",
+    page_icon="🟢",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS
+# Custom CSS with green theme
 st.markdown("""
 <style>
     .main-header {
         font-size: 2.5rem;
-        font-weight: bold;
-        color: #FC6D26;
-        margin-bottom: 1rem;
+        font-weight: 700;
+        color: #2D5F2E;
+        margin-bottom: 0.5rem;
+        letter-spacing: -0.5px;
     }
     .sub-header {
-        font-size: 1.2rem;
-        color: #6e6e6e;
+        font-size: 1.1rem;
+        color: #5a6c57;
         margin-bottom: 2rem;
+        font-weight: 400;
     }
     .stButton > button {
-        background-color: #FC6D26;
+        background-color: #4CAF50;
         color: white;
-        font-weight: bold;
-        border-radius: 5px;
-        padding: 0.5rem 2rem;
+        font-weight: 600;
+        border-radius: 4px;
+        padding: 0.6rem 2rem;
+        border: none;
+        transition: all 0.3s ease;
     }
     .stButton > button:hover {
-        background-color: #E24329;
+        background-color: #45a049;
+        box-shadow: 0 2px 8px rgba(76, 175, 80, 0.3);
     }
     .success-box {
         padding: 1rem;
-        border-radius: 5px;
-        background-color: #d4edda;
-        border-left: 5px solid #28a745;
+        border-radius: 4px;
+        background-color: #e8f5e9;
+        border-left: 4px solid #4CAF50;
         margin: 1rem 0;
+        color: #2e7d32;
     }
     .info-box {
         padding: 1rem;
-        border-radius: 5px;
-        background-color: #d1ecf1;
-        border-left: 5px solid #17a2b8;
+        border-radius: 4px;
+        background-color: #f1f8f4;
+        border-left: 4px solid #81c784;
         margin: 1rem 0;
+        color: #2D5F2E;
+    }
+    .metric-card {
+        background-color: #f1f8f4;
+        padding: 1rem;
+        border-radius: 4px;
+        border: 1px solid #c8e6c9;
+    }
+    /* Sidebar styling */
+    [data-testid="stSidebar"] {
+        background-color: #f8fdf9;
+    }
+    /* Header separator */
+    .header-line {
+        height: 3px;
+        background: linear-gradient(90deg, #4CAF50 0%, #81c784 100%);
+        margin: 1rem 0 2rem 0;
+        border-radius: 2px;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # Header
-st.markdown('<div class="main-header">📚 GitLab Documentation Generator</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">AI-powered documentation generation for GitLab projects using multi-agent collaboration</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">NoBuddy - Your Onboarding Buddy</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Your team’s knowledge, instantly searchable for easy project onboarding. Turns "nobody knows" into "NoBuddy knows"</div>', unsafe_allow_html=True)
+st.markdown('<div class="header-line"></div>', unsafe_allow_html=True)
 
 # Login page - shown if not authenticated
 if not st.session_state.authenticated:
     st.markdown("---")
-    st.markdown("### 🔐 Login")
-    st.info("Please enter your GitLab token and optionally your Google Drive token to get started.")
+    st.markdown("### Authentication")
+    st.markdown('<div class="info-box">Please enter your GitLab token and optionally your Google Drive token to get started.</div>', unsafe_allow_html=True)
 
     col1, col2 = st.columns(2)
 
@@ -209,27 +234,27 @@ if not st.session_state.authenticated:
             help="Optional: Enter your Google Drive token to enable Drive search integration."
         )
 
-    if st.button("🚀 Login and Load Projects", type="primary", use_container_width=True):
+    if st.button("Login and Load Projects", type="primary", use_container_width=True):
         if not gitlab_token_input:
-            st.error("⚠️ GitLab token is required!")
+            st.error("✗ GitLab token is required")
         else:
             with st.spinner("Verifying GitLab token and fetching your projects..."):
                 # Verify GitLab token
                 if not verify_gitlab_token(gitlab_token_input, st.session_state.gitlab_url):
-                    st.error("❌ Invalid GitLab token. Please check your token and try again.")
+                    st.error("✗ Invalid GitLab token. Please check your token and try again.")
                 else:
                     # Fetch user projects
                     projects = fetch_user_projects(gitlab_token_input, st.session_state.gitlab_url)
 
                     if not projects:
-                        st.warning("⚠️ No projects found or error fetching projects. Please check your token permissions.")
+                        st.warning("No projects found or error fetching projects. Please check your token permissions.")
                     else:
                         # Store tokens and projects in session state
                         st.session_state.gitlab_token = gitlab_token_input
                         st.session_state.drive_token = drive_token_input
                         st.session_state.user_projects = projects
                         st.session_state.authenticated = True
-                        st.success(f"✅ Successfully authenticated! Found {len(projects)} accessible projects.")
+                        st.success(f"✓ Successfully authenticated. Found {len(projects)} accessible projects.")
                         st.rerun()
 
     st.markdown("---")
@@ -243,23 +268,19 @@ if not st.session_state.authenticated:
     # Stop rendering the rest of the page
     st.stop()
 
-# Logout button in sidebar for authenticated users
 # Sidebar
 with st.sidebar:
-    st.header("⚙️ Configuration")
+    st.header("Configuration")
 
     # User info and logout
-    st.markdown("### 👤 User Session")
-    col_logout1, col_logout2 = st.columns([2, 1])
-    with col_logout1:
-        st.success("✅ Authenticated")
-    with col_logout2:
-        if st.button("➜]"):
-            st.session_state.authenticated = False
-            st.session_state.gitlab_token = ""
-            st.session_state.drive_token = ""
-            st.session_state.user_projects = []
-            st.rerun()
+    st.markdown("### User Session")
+    st.markdown('<div class="success-box" style="margin: 0; padding: 0.5rem;">✓ Authenticated</div>', unsafe_allow_html=True)
+    if st.button("Logout ⏻", use_container_width=True):
+        st.session_state.authenticated = False
+        st.session_state.gitlab_token = ""
+        st.session_state.drive_token = ""
+        st.session_state.user_projects = []
+        st.rerun()
 
     st.markdown("### Project Settings")
 
@@ -283,7 +304,7 @@ with st.sidebar:
         project_input = project_options[selected_index]
 
         # Show project count
-        st.caption(f"📊 {len(st.session_state.user_projects)} projects available")
+        st.caption(f"{len(st.session_state.user_projects)} projects available")
     else:
         st.warning("No projects loaded. Please logout and login again.")
         project_input = ""
@@ -312,18 +333,18 @@ with st.sidebar:
     st.markdown("### About")
     st.markdown("""
     This tool uses a **dual-LLM architecture**:
-    - **GPT OSS 120B**: For tool calling and data fetching
-    - **Sahabat AI 70B**: For documentation writing
+    - GPT OSS 120B: For tool calling and data fetching
+    - Sahabat AI 70B: For documentation writing
 
     **Agents:**
-    1. GitLab Data Analyzer
-    2. Google Drive Analyzer (optional)
-    3. Internal KB Analyzer (optional)
-    4. Documentation Writer
+    - GitLab Data Analyzer
+    - Google Drive Analyzer (optional)
+    - Internal KB Analyzer (optional)
+    - Documentation Writer
     """)
 
 # File viewer section
-with st.expander("📂 View Existing Documentation", expanded=False):
+with st.expander("View Existing Documentation", expanded=False):
     st.markdown("Load and view previously generated documentation files")
 
     # List existing markdown files
@@ -344,23 +365,23 @@ with st.expander("📂 View Existing Documentation", expanded=False):
             cleaned_content = extract_markdown_from_response(content)
 
             st.markdown("---")
-            st.markdown("### 📄 File Content")
+            st.markdown("### File Content")
 
             # Show in tabs
-            view_tab1, view_tab2 = st.tabs(["📖 Preview", "💾 Download"])
+            view_tab1, view_tab2 = st.tabs(["Preview", "Download"])
 
             with view_tab1:
                 st.markdown(cleaned_content, unsafe_allow_html=False)
 
             with view_tab2:
                 st.download_button(
-                    label="⬇️ Download Markdown",
+                    label="Download Markdown",
                     data=cleaned_content,
                     file_name=selected_file.name,
                     mime="text/markdown"
                 )
     else:
-        st.info("No documentation files found. Generate some documentation first!")
+        st.info("No documentation files found. Generate some documentation first.")
 
 st.markdown("---")
 
@@ -368,47 +389,48 @@ st.markdown("---")
 col1, col2 = st.columns([2, 1])
 
 with col1:
-    st.markdown("### 🚀 Generate Documentation")
+    st.markdown("### Generate Documentation")
 
     # Validation feedback
     if project_input:
         if validate_gitlab_project(project_input):
-            st.markdown(f'<div class="success-box">✅ Valid project format: <strong>{project_input}</strong></div>', unsafe_allow_html=True)
+            st.markdown(f'<div class="success-box">✓ Valid project format: <strong>{project_input}</strong></div>', unsafe_allow_html=True)
         else:
-            st.error("❌ Invalid project format. Expected: namespace/project-name")
+            st.error("✗ Invalid project format. Expected: namespace/project-name")
 
     # Generate button
-    generate_button = st.button("🎯 Generate Documentation", type="primary", use_container_width=True)
+    generate_button = st.button("Generate Documentation", type="primary", use_container_width=True)
 
 with col2:
-    st.markdown("### 📊 Agent Status")
+    st.markdown("### Agent Status")
     agent_count = 2  # Minimum: GitLab + Writer
     if enable_drive:
         agent_count += 1
     if enable_rag:
         agent_count += 1
 
-    st.metric("Active Agents", agent_count)
-    st.info(f"""
+    st.markdown(f'<div class="metric-card"><h2 style="color: #4CAF50; margin: 0;">{agent_count}</h2><p style="margin: 0; color: #5a6c57;">Active Agents</p></div>', unsafe_allow_html=True)
+    st.markdown("")
+    st.markdown(f"""
     **Enabled Agents:**
-    - ✅ GitLab Data Analyzer
-    - {'✅' if enable_drive else '❌'} Google Drive Analyzer
-    - {'✅' if enable_rag else '❌'} Internal KB Analyzer
-    - ✅ Documentation Writer
+    - {'✓' if True else '✗'} GitLab Data Analyzer
+    - {'✓' if enable_drive else '✗'} Google Drive Analyzer
+    - {'✓' if enable_rag else '✗'} Internal KB Analyzer
+    - {'✓' if True else '✗'} Documentation Writer
     """)
 
 # Documentation generation
 if generate_button:
     if not project_input:
-        st.error("⚠️ Please enter a GitLab project path")
+        st.error("✗ Please enter a GitLab project path")
     elif not validate_gitlab_project(project_input):
-        st.error("⚠️ Invalid project format. Expected: namespace/project-name")
+        st.error("✗ Invalid project format. Expected: namespace/project-name")
     else:
         try:
             # Progress container
             with st.container():
                 st.markdown("---")
-                st.markdown("### 🔄 Generation Progress")
+                st.markdown("### Generation Progress")
 
                 progress_bar = st.progress(0)
                 status_text = st.empty()
@@ -446,17 +468,17 @@ if generate_button:
                 )
 
                 progress_bar.progress(100)
-                status_text.text("✅ Documentation generated successfully!")
+                status_text.text("✓ Documentation generated successfully")
 
                 # Success message
-                st.markdown(f'<div class="success-box">✅ <strong>Documentation saved to:</strong> {output_path}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="success-box">✓ <strong>Documentation saved to:</strong> {output_path}</div>', unsafe_allow_html=True)
 
                 # Display documentation
                 st.markdown("---")
-                st.markdown("### 📄 Generated Documentation")
+                st.markdown("### Generated Documentation")
 
                 # Tabs for different views
-                tab1, tab2 = st.tabs(["📖 Preview", "💾 Download"])
+                tab1, tab2 = st.tabs(["Preview", "Download"])
 
                 with tab1:
                     # Render markdown properly
@@ -465,7 +487,7 @@ if generate_button:
 
                 with tab2:
                     st.download_button(
-                        label="⬇️ Download Markdown",
+                        label="Download Markdown",
                         data=documentation.get("documentation", ""),
                         file_name=os.path.basename(output_path),
                         mime="text/markdown"
@@ -474,20 +496,20 @@ if generate_button:
                     st.info(f"File also saved locally at: `{output_path}`")
 
         except ValueError as e:
-            st.error(f"❌ Validation Error: {str(e)}")
+            st.error(f"✗ Validation Error: {str(e)}")
             logger.error(f"Validation error: {e}")
 
         except Exception as e:
-            st.error(f"❌ Error generating documentation: {str(e)}")
+            st.error(f"✗ Error generating documentation: {str(e)}")
             logger.error(f"Error generating documentation: {e}", exc_info=True)
 
-            with st.expander("🔍 Error Details"):
+            with st.expander("Error Details"):
                 st.code(str(e))
 
 # Footer
 st.markdown("---")
 st.markdown("""
-<div style="text-align: center; color: #6e6e6e; padding: 1rem;">
-    Made with ❤️ using CrewAI, GoTo Custom LLMs, and Streamlit
+<div style="text-align: center; color: #5a6c57; padding: 1rem; font-size: 0.9rem;">
+    Built for GoTo Hackathon 2025 by Bring Me The Hackathon.
 </div>
 """, unsafe_allow_html=True)
