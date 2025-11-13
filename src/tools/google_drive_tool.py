@@ -97,6 +97,31 @@ class GoogleDriveMCPTool(BaseTool):
         """Check if MCP tools are available."""
         return getattr(self, '_initialized', False)
 
+    def _convert_uri_to_url(self, uri: str, mime_type: str = "") -> str:
+        """
+        Convert Google Drive URI to clickable URL.
+
+        Args:
+            uri: Drive URI in format "gdrive:///fileId"
+            mime_type: MIME type of the file
+
+        Returns:
+            Full Google Drive URL
+        """
+        # Extract file ID from URI (format: gdrive:///fileId)
+        file_id = uri.replace("gdrive:///", "")
+
+        # Determine URL based on MIME type
+        if "document" in mime_type:
+            return f"https://docs.google.com/document/d/{file_id}"
+        elif "spreadsheet" in mime_type:
+            return f"https://docs.google.com/spreadsheets/d/{file_id}"
+        elif "presentation" in mime_type:
+            return f"https://docs.google.com/presentation/d/{file_id}"
+        else:
+            # Generic Drive file viewer
+            return f"https://drive.google.com/file/d/{file_id}"
+
     def _run(self, query: str) -> str:
         """
         Search Google Drive and retrieve document content.
@@ -131,18 +156,25 @@ class GoogleDriveMCPTool(BaseTool):
             for file_info in files[:self.top_k]:
                 file_uri = file_info.get("uri")
                 file_name = file_info.get("name")
+                mime_type = file_info.get("mimeType", "")
 
                 if file_uri:
                     logger.debug(f"Retrieving file: {file_name}")
                     file_content = self._get_file(file_uri)
                     content = file_content.get("content", "")
+
+                    # Convert URI to clickable URL
+                    clickable_url = self._convert_uri_to_url(file_uri, mime_type)
+
                     results.append({
                         "name": file_name,
                         "uri": file_uri,
-                        "mimeType": file_info.get("mimeType", ""),
+                        "url": clickable_url,  # Add clickable URL
+                        "mimeType": mime_type,
                         "content": content[:2000],  # Limit to first 2000 chars
                         "full_content_length": len(content)
                     })
+                    logger.info(f"Converted {file_name} URI to URL: {clickable_url}")
 
             logger.info(f"Retrieved {len(results)} files from Google Drive")
             return json.dumps({

@@ -15,7 +15,8 @@ class AgentRole(str, Enum):
     GITLAB_ANALYZER = "GitLab Data Analyzer"
     DRIVE_ANALYZER = "Google Drive Reference Analyzer"
     RAG_ANALYZER = "Internal Knowledge Base Analyzer"
-    DOCUMENTATION_WRITER = "Technical Documentation Writer"
+    LEARNING_PATH_WRITER = "Learning Path Writer"
+    CODE_QA_AGENT = "Code Q&A Agent"
 
 
 class ToolName(str, Enum):

@@ -86,12 +86,16 @@ class GitLabMCPTool(BaseTool):
             # Get README
             readme = self._get_readme(project)
 
+            # Get code snippets from key files
+            code_snippets = self._get_code_snippets(project, project_info.get("default_branch", "main"))
+
             result = {
                 "project": project,
                 "info": project_info,
                 "file_structure": file_structure,
                 "recent_commits": commits,
-                "readme": readme
+                "readme": readme,
+                "code_snippets": code_snippets
             }
 
             logger.info(f"Successfully fetched data for project: {project}")
@@ -285,3 +289,175 @@ class GitLabMCPTool(BaseTool):
         except requests.exceptions.RequestException as e:
             logger.error(f"Request error fetching README: {e}")
             return f"Error fetching README: {str(e)}"
+
+    def _get_code_snippets(self, project: str, branch: str = "main") -> Dict[str, Any]:
+        """
+        Get code snippets from key files in the repository.
+
+        Args:
+            project: Project identifier
+            branch: Branch name (default: main)
+
+        Returns:
+            Dictionary with code snippets from key files
+        """
+        try:
+            gitlab_url = getattr(self, 'gitlab_url')
+            headers = getattr(self, 'headers')
+            project_encoded = quote_plus(project)
+
+            # Key files to fetch (in priority order)
+            key_files = [
+                'main.py',
+                'app.py',
+                '__init__.py',
+                'setup.py',
+                'requirements.txt',
+                'Dockerfile',
+                'docker-compose.yml',
+                'config.py',
+                'settings.py'
+            ]
+
+            snippets = {}
+
+            for filename in key_files:
+                file_encoded = quote_plus(filename)
+                url = f'{gitlab_url}/api/v4/projects/{project_encoded}/repository/files/{file_encoded}/raw'
+
+                logger.debug(f"Trying to fetch code snippet: {filename}")
+                response = requests.get(
+                    url,
+                    headers=headers,
+                    params={'ref': branch},
+                    timeout=30
+                )
+
+                if response.status_code == 200:
+                    content = response.text
+                    # Truncate to reasonable size (300 chars for snippets)
+                    snippet = content[:300]
+                    if len(content) > 300:
+                        snippet += "\n... (truncated)"
+
+                    # Create file link
+                    file_link = f"{gitlab_url}/{project}/-/blob/{branch}/{filename}"
+
+                    snippets[filename] = {
+                        "content": snippet,
+                        "link": file_link,
+                        "full_length": len(content)
+                    }
+                    logger.info(f"Successfully fetched snippet: {filename}")
+
+                    # Limit to 3 snippets to avoid too much data
+                    if len(snippets) >= 3:
+                        break
+
+            if not snippets:
+                logger.info("No key files found for code snippets")
+                return {"message": "No key files found"}
+
+            return snippets
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request error fetching code snippets: {e}")
+            return {"error": str(e)}
+
+    def _get_code_files_from_directory(self, project: str, branch: str = "main", directory: str = "src", max_files: int = 10) -> Dict[str, Any]:
+        """
+        Recursively fetch code files from a specific directory.
+
+        Args:
+            project: Project identifier
+            branch: Branch name (default: main)
+            directory: Directory to search (default: src)
+            max_files: Maximum number of files to fetch (default: 10)
+
+        Returns:
+            Dictionary with code files and their contents
+        """
+        try:
+            gitlab_url = getattr(self, 'gitlab_url')
+            headers = getattr(self, 'headers')
+            project_encoded = quote_plus(project)
+
+            # Get directory tree recursively
+            url = f'{gitlab_url}/api/v4/projects/{project_encoded}/repository/tree'
+
+            logger.info(f"Fetching code files from {directory}/ directory")
+            response = requests.get(
+                url,
+                headers=headers,
+                params={'path': directory, 'recursive': True, 'per_page': 100, 'ref': branch},
+                timeout=30
+            )
+
+            if response.status_code != 200:
+                logger.warning(f"Failed to fetch directory tree: HTTP {response.status_code}")
+                return {"error": f"Failed to fetch directory tree: {response.status_code}"}
+
+            tree = response.json()
+
+            # Filter for Python files (exclude .ipynb)
+            python_files = [
+                item for item in tree
+                if item.get('type') == 'blob'
+                and item.get('name', '').endswith('.py')
+                and not item.get('name', '').endswith('.ipynb')
+            ]
+
+            if not python_files:
+                logger.info(f"No Python files found in {directory}/")
+                return {"message": f"No Python files found in {directory}/"}
+
+            # Fetch content of files (limit to max_files)
+            code_files = {}
+            for file_item in python_files[:max_files]:
+                file_path = file_item.get('path')
+                file_name = file_item.get('name')
+
+                # Fetch file content
+                file_encoded = quote_plus(file_path)
+                file_url = f'{gitlab_url}/api/v4/projects/{project_encoded}/repository/files/{file_encoded}/raw'
+
+                logger.debug(f"Fetching code file: {file_path}")
+                file_response = requests.get(
+                    file_url,
+                    headers=headers,
+                    params={'ref': branch},
+                    timeout=30
+                )
+
+                if file_response.status_code == 200:
+                    content = file_response.text
+
+                    # Create file link
+                    file_link = f"{gitlab_url}/{project}/-/blob/{branch}/{file_path}"
+
+                    # Limit content to reasonable size (first 1000 lines or 50KB)
+                    lines = content.split('\n')
+                    if len(lines) > 1000:
+                        content = '\n'.join(lines[:1000]) + "\n... (truncated)"
+                    elif len(content) > 50000:
+                        content = content[:50000] + "\n... (truncated)"
+
+                    code_files[file_path] = {
+                        "name": file_name,
+                        "path": file_path,
+                        "link": file_link,
+                        "content": content,
+                        "lines": len(lines)
+                    }
+                    logger.info(f"Successfully fetched: {file_path} ({len(lines)} lines)")
+
+            logger.info(f"Fetched {len(code_files)} code files from {directory}/")
+            return {
+                "directory": directory,
+                "files_count": len(code_files),
+                "files": code_files
+            }
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request error fetching code files: {e}")
+            return {"error": str(e)}

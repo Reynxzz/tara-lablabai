@@ -6,13 +6,14 @@ from crewai import Agent, Task, Crew, Process
 
 from src.config.settings import get_settings
 from src.config.constants import LLMModel, DEFAULT_TEMPERATURE_TOOL_CALLING, DEFAULT_TEMPERATURE_WRITING
-from src.tools import GitLabMCPTool, GoogleDriveMCPTool, RAGMilvusTool
+from src.tools import GitLabMCPTool, GoogleDriveMCPTool, RAGMilvusTool, GitLabCodeQATool
 from src.llm import create_tool_calling_llm, create_writing_llm
 from src.agents import (
     create_gitlab_analyzer_agent,
     create_drive_analyzer_agent,
     create_rag_analyzer_agent,
-    create_documentation_writer_agent
+    create_documentation_writer_agent,
+    create_code_qa_agent
 )
 from src.utils.logger import setup_logger
 from src.utils.validators import validate_gitlab_project, sanitize_filename
@@ -156,12 +157,14 @@ class DocumentationCrew:
                 f'   - Project name, description, default branch, visibility, and license\n'
                 f'   - Stars, forks, open issues count\n'
                 f'   - Topics/tags\n'
-                f'   - Main files and their purposes\n'
-                f'   - Recent commit activity\n'
+                f'   - Main files and their purposes WITH LINKS\n'
+                f'   - Recent commit activity with contributor names\n'
                 f'   - README content (if available)\n'
+                f'   - Code snippets from key files (with links to full files)\n'
                 f'   - Last activity date\n\n'
                 f'IMPORTANT: Provide ALL the raw data you fetch from the tool. Be thorough and comprehensive. '
-                f'Your output will be used by the documentation writer to create the final documentation. '
+                f'Your output will be used by the Learning Path writer to create the final learning path. '
+                f'Make sure to include all links (project URL, file links from code_snippets section). '
                 f'If you have not called the tool yet, STOP and call it now.'
             ),
             expected_output=(
@@ -171,7 +174,8 @@ class DocumentationCrew:
                 '- Project metadata (name, description, default branch, visibility, license, URL)\n'
                 '- Community metrics (stars, forks, issues)\n'
                 '- File structure and key files\n'
-                '- Recent activity and commits\n'
+                '- Code snippets with links to full files (from code_snippets field in tool response)\n'
+                '- Recent activity and commits with contributor names\n'
                 '- Any additional relevant information from the project'
             ),
             agent=agent
@@ -194,9 +198,13 @@ class DocumentationCrew:
                 f'- If you see directories or .py files, you are looking at the WRONG tool output!\n\n'
                 f'STEPS:\n'
                 f'1. IMMEDIATELY call the Google Drive Document Analyzer tool (NOT GitLab) with input: {project}\n'
-                f'2. Wait for the tool response - it should contain Google Docs/Sheets with URIs starting with "gdrive:///"\n'
+                f'2. Wait for the tool response - it should contain Google Docs/Sheets with both "uri" and "url" fields\n'
                 f'3. Verify the response contains Google Drive documents (NOT GitLab files)\n'
-                f'4. If the tool returns Google Drive documents, summarize the ACTUAL document content\n'
+                f'4. If the tool returns Google Drive documents, extract:\n'
+                f'   - Document names and clickable URLs (use the "url" field, NOT "uri")\n'
+                f'   - The "url" field contains full links like https://docs.google.com/document/d/...\n'
+                f'   - Key definitions, concepts, or important points from each document\n'
+                f'   - Why each document is relevant (what users will learn from it)\n'
                 f'5. If the tool returns no documents or an error, report exactly: "No relevant documentation found in Google Drive"\n\n'
                 f'VERIFICATION: Before reporting results, confirm:\n'
                 f'- Did I call the Google Drive Document Analyzer tool? (NOT GitLab)\n'
@@ -208,7 +216,11 @@ class DocumentationCrew:
                 'A summary that proves Google Drive tool was called correctly:\n'
                 '- Confirmation: "Called Google Drive Document Analyzer tool with query: {query}"\n'
                 '- Number of Google Drive documents found (NOT GitLab files)\n'
-                '- For EACH Google Drive document: Name, URI (must start with "gdrive:///"), and brief content summary\n'
+                '- For EACH Google Drive document:\n'
+                '  - Name and clickable URL (use the "url" field from tool response, NOT "uri")\n'
+                '  - The "url" field contains the full Google Docs/Sheets link (https://docs.google.com/...)\n'
+                '  - Key definitions or important points extracted from the document\n'
+                '  - Why this document is useful for learning about the project\n'
                 '- Key insights from the Google Drive document content (NOT from GitLab repository)\n'
                 '- If tool returned no results: "No relevant documentation found in Google Drive"\n'
                 '- NEVER report GitLab file structure (common, src, config, .py files) as Google Drive results'
@@ -263,68 +275,81 @@ class DocumentationCrew:
             agent=agent
         )
 
-    def _create_documentation_writing_task(self, agent: Agent, project: str) -> Task:
-        """Create a task for writing documentation based on fetched data."""
+    def _create_learning_path_writing_task(self, agent: Agent, project: str) -> Task:
+        """Create a task for writing a learning path based on fetched data."""
         return Task(
             description=(
-                f'TASK: Generate comprehensive Markdown documentation for the GitLab project "{project}" '
-                f'based on the data provided by previous agents.\n\n'
+                f'TASK: Generate a "Learning Path" in Markdown format for the GitLab project "{project}" '
+                f'that guides users to the right resources for onboarding.\n\n'
+                f'CRITICAL: This is a LEARNING PATH, not comprehensive documentation. Your goal is to tell users '
+                f'WHICH documents and resources to read, not to explain everything in detail.\n\n'
                 f'STEPS:\n'
-                f'1. Review all project data provided by the previous agents (GitLab, Google Drive, RAG)\n'
-                f'2. Create a comprehensive Markdown document with these sections:\n\n'
-                f'## Required Markdown Structure:\n\n'
-                f'# [Project Name]\n\n'
-                f'## Overview\n'
-                f'- Project description and purpose\n'
-                f'- Default branch, visibility, license\n'
-                f'- Project URL: [Link to GoLabs]\n\n'
-                f'## Recent Contributors\n'
-                f'- List of recent commit authors with their latest contributions\n'
-                f'- Include commit titles and dates\n\n'
-                f'## Project Structure\n'
-                f'- List main directories and files\n'
-                f'- Include GoLabs file links (format: https://source.golabs.io/[project]/-/blob/[branch]/[filepath])\n'
-                f'- Brief description of each component\n\n'
-                f'## Reference Documentation (if available from Google Drive)\n'
-                f'- List Google Drive documents with clickable links\n'
-                f'- Include brief summary of each document\n'
-                f'- Use format: [Document Name](gdrive_uri)\n\n'
-                f'## Internal Knowledge Base (if available)\n'
-                f'- Relevant information from internal systems\n'
-                f'- Context about how this project relates to company infrastructure\n\n'
-                f'## Activity & Metrics\n'
-                f'- Stars, forks, open issues\n'
-                f'- Last activity date\n'
-                f'- Recent commit summary\n\n'
-                f'## Getting Started\n'
-                f'- Installation instructions (based on README and project files)\n'
-                f'- Usage examples\n'
-                f'- Configuration details\n\n'
-                f'IMPORTANT:\n'
-                f'- Use proper Markdown formatting with headers, lists, and links\n'
-                f'- Make all URLs clickable using [text](url) format\n'
-                f'- Include actual contributor names from commit data\n'
-                f'- Create proper file links to GoLabs for key files\n'
-                f'- If Google Drive or RAG data is available, include it in separate sections\n'
-                f'- Write clear, professional technical documentation\n'
-                f'- DO NOT wrap the markdown in JSON format\n'
-                f'- DO NOT use code blocks (```)\n'
-                f'- Return ONLY the raw markdown text starting with # header\n'
+                f'1. Review all data provided by previous agents (GitLab, Google Drive, RAG)\n'
+                f'2. Extract ALL valid links from the agents\' outputs\n'
+                f'3. Create a Learning Path with the structure below:\n\n'
+                f'## Required Learning Path Structure:\n\n'
+                f'# 🎯 Learning Path: [Project Name]\n\n'
+                f'## 📋 Overview\n'
+                f'Synthesize a brief overview from ALL sources (GitLab description, Drive docs, RAG results):\n'
+                f'- What this project does (combine insights from all sources, not just GitLab description)\n'
+                f'- Key purpose and use cases\n'
+                f'- Technologies used\n'
+                f'- Project metadata: [Project URL](link), License, Default Branch\n\n'
+                f'## 👥 Recent Contributors\n'
+                f'- List recent commit authors with their latest contributions\n'
+                f'- Include commit titles and dates\n'
+                f'- Keep this section as-is from GitLab data\n\n'
+                f'## 📁 Repository Structure\n'
+                f'List key directories and files with **clickable links**:\n'
+                f'- [filename](https://source.golabs.io/[project]/-/blob/[branch]/[filepath]) - Brief purpose\n'
+                f'- Focus on important entry points and configuration files\n\n'
+                f'## 💻 Code Snippets (First Look)\n'
+                f'Show code snippets from key files (if available from GitLab tool):\n'
+                f'- Display the snippet with syntax highlighting\n'
+                f'- Include link to full file: [View full file](link)\n'
+                f'- Brief explanation of what this file does\n\n'
+                f'## 📚 Reference Documentation\n'
+                f'**From Google Drive** (if available):\n'
+                f'- [Document Name](url) - Use the "url" field from Drive tool results (NOT "uri")\n'
+                f'- The "url" field contains clickable Google Docs/Sheets links (https://docs.google.com/...)\n'
+                f'- Extract important definitions, concepts, or guidelines mentioned in the Drive search results\n'
+                f'- Tell users WHY they should read each document\n\n'
+                f'**From Internal Knowledge Base** (if available):\n'
+                f'- Relevant context from internal systems (mention the source field)\n'
+                f'- How this project relates to company infrastructure\n'
+                f'- Links to related internal resources if mentioned\n\n'
+                f'## 🚀 Getting Started\n'
+                f'Guide users to the right resources:\n'
+                f'- "Start by reading [README](link)"\n'
+                f'- "Check configuration in [config file](link)"\n'
+                f'- "Review setup instructions in [Drive doc](link)" (if available)\n'
+                f'- Installation steps (brief, with links to detailed docs)\n\n'
+                f'IMPORTANT FORMATTING RULES:\n'
+                f'- Every resource MUST have a valid clickable link\n'
+                f'- Use format: [Text](url) for all links\n'
+                f'- Code snippets should use ```language syntax\n'
+                f'- Extract key points from Drive documents, don\'t just list them\n'
+                f'- Synthesize the overview from multiple sources\n'
+                f'- DO NOT wrap in JSON or code blocks\n'
+                f'- Return ONLY raw markdown starting with # header\n'
             ),
             expected_output=(
-                'A complete Markdown document with:\n'
-                '- Clear section headers (# and ##)\n'
-                '- Project overview with metadata\n'
-                '- Recent contributors list with names and commit details\n'
-                '- File structure with clickable GoLabs links\n'
-                '- Reference documentation links (if available from Google Drive)\n'
-                '- Internal knowledge base insights (if available)\n'
-                '- Activity metrics and statistics\n'
-                '- Getting started guide\n'
+                'A complete Learning Path in Markdown with:\n'
+                '- Project overview synthesized from GitLab, Drive, and RAG sources\n'
+                '- Recent contributors section (unchanged from GitLab)\n'
+                '- Repository structure with clickable file links\n'
+                '- Code snippets with links to full files\n'
+                '- Reference documentation with key points/definitions extracted\n'
+                '- For Google Drive links: Use the "url" field (https://docs.google.com/...), NOT "uri" (gdrive:///...)\n'
+                '- Getting Started guide with links to resources\n'
                 '- All links properly formatted as [text](url)\n'
+                '- Focus on GUIDING users to resources, not explaining everything\n'
             ),
             agent=agent
         )
+
+    # Backward compatibility alias
+    _create_documentation_writing_task = _create_learning_path_writing_task
 
     def generate_documentation(self, project: str) -> Dict:
         """
@@ -351,12 +376,12 @@ class DocumentationCrew:
 
         logger.info("=" * 60)
         logger.info(f"Starting {agent_count}-agent collaboration for project: {project}")
-        logger.info(f"  Agent 1 (gpt-oss): Fetching GitLab data...")
+        logger.info(f"  Agent 1 (gpt-oss): Fetching GitLab data with code snippets...")
         if self.enable_google_drive:
-            logger.info(f"  Agent 2 (gpt-oss): Searching Google Drive for references...")
+            logger.info(f"  Agent 2 (gpt-oss): Searching Google Drive for reference docs...")
         if self.enable_rag:
             logger.info(f"  Agent {3 if self.enable_google_drive else 2} (gpt-oss): Searching internal knowledge base...")
-        logger.info(f"  Agent {agent_count} (sahabat-4bit): Writing documentation...")
+        logger.info(f"  Agent {agent_count} (sahabat-4bit): Writing learning path...")
         logger.info("=" * 60)
 
         # Create agents and tasks
@@ -400,7 +425,7 @@ class DocumentationCrew:
         result_str = str(result)
         markdown_content = extract_markdown_from_response(result_str)
 
-        logger.info("Successfully generated Markdown documentation")
+        logger.info("Successfully generated Learning Path in Markdown format")
         return {
             "project": project,
             "documentation": markdown_content,
@@ -409,10 +434,10 @@ class DocumentationCrew:
 
     def save_documentation(self, documentation: Dict, output_file: Optional[str] = None) -> str:
         """
-        Save documentation to a Markdown file.
+        Save learning path to a Markdown file.
 
         Args:
-            documentation: Documentation dictionary with 'documentation' and 'format' keys
+            documentation: Learning path dictionary with 'documentation' and 'format' keys
             output_file: Output file path (optional, auto-generated if not provided)
 
         Returns:
@@ -423,7 +448,7 @@ class DocumentationCrew:
             safe_project = sanitize_filename(project.replace('/', '_'))
             doc_format = documentation.get("format", "markdown")
             extension = ".md" if doc_format == "markdown" else ".txt"
-            output_file = f"documentation_{safe_project}{extension}"
+            output_file = f"learning_path_{safe_project}{extension}"
 
         # Get the documentation content
         content = documentation.get("documentation", "")
@@ -431,5 +456,91 @@ class DocumentationCrew:
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write(content)
 
-        logger.info(f"Documentation saved to {output_file}")
+        logger.info(f"Learning path saved to {output_file}")
         return output_file
+
+    def answer_code_question(self, project: str, question: str, directory: str = "src") -> Dict:
+        """
+        Answer a specific question about the repository code.
+
+        Args:
+            project: GitLab project in format 'namespace/project'
+            question: Question about the codebase
+            directory: Directory to search (default: src)
+
+        Returns:
+            Dictionary containing the answer and relevant code references
+
+        Raises:
+            ValueError: If project format is invalid
+        """
+        if not validate_gitlab_project(project):
+            raise ValueError(f"Invalid project format: {project}. Expected format: namespace/project")
+
+        logger.info("=" * 60)
+        logger.info(f"Code Q&A for project: {project}")
+        logger.info(f"Question: {question}")
+        logger.info(f"Searching in: {directory}/")
+        logger.info("=" * 60)
+
+        # Initialize Code Q&A tool
+        code_qa_tool = GitLabCodeQATool()
+
+        # Create Code Q&A agent with tool calling LLM
+        code_qa_agent = create_code_qa_agent(self.gpt_oss_llm, code_qa_tool)
+
+        # Create task for answering the question
+        qa_task = Task(
+            description=(
+                f'TASK: Answer the following question about the GitLab project "{project}":\n\n'
+                f'Question: {question}\n\n'
+                f'CRITICAL REQUIREMENT: You MUST call the "GitLab Code Q&A" tool with:\n'
+                f'- project: {project}\n'
+                f'- question: {question}\n'
+                f'- directory: {directory}\n\n'
+                f'STEPS:\n'
+                f'1. IMMEDIATELY call the GitLab Code Q&A tool with the parameters above\n'
+                f'2. Wait for the tool response containing code files\n'
+                f'3. Analyze ONLY the code provided by the tool\n'
+                f'4. Answer the question based on actual code content\n'
+                f'5. Quote specific code snippets (with file references)\n'
+                f'6. Provide file links for all referenced code\n\n'
+                f'IMPORTANT:\n'
+                f'- DO NOT make assumptions about code that is not in the tool response\n'
+                f'- DO NOT use your training data to answer\n'
+                f'- ONLY analyze code files returned by the tool\n'
+                f'- If no relevant code is found, say so explicitly\n'
+                f'- Always include file links (use the "link" field from tool response)\n'
+            ),
+            expected_output=(
+                'A comprehensive answer that includes:\n'
+                '- Direct answer to the question\n'
+                '- Specific code examples (quoted from tool response)\n'
+                '- File references with clickable links for each code snippet\n'
+                '- Summary of findings\n'
+                '- If no relevant code found: "No relevant code found in the specified directory"\n'
+            ),
+            agent=code_qa_agent
+        )
+
+        # Create single-agent crew
+        crew = Crew(
+            agents=[code_qa_agent],
+            tasks=[qa_task],
+            process=Process.sequential,
+            verbose=True
+        )
+
+        logger.info("Executing Code Q&A agent...")
+        result = crew.kickoff()
+
+        # Convert result to string
+        result_str = str(result)
+
+        logger.info("Successfully answered code question")
+        return {
+            "project": project,
+            "question": question,
+            "directory": directory,
+            "answer": result_str
+        }

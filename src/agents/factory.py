@@ -2,7 +2,7 @@
 from crewai import Agent
 from typing import List, Optional
 
-from src.tools import GitLabMCPTool, GoogleDriveMCPTool, RAGMilvusTool
+from src.tools import GitLabMCPTool, GoogleDriveMCPTool, RAGMilvusTool, GitLabCodeQATool
 from src.llm import GoToCustomLLM
 from src.config.constants import AgentRole
 from src.utils.logger import setup_logger
@@ -136,9 +136,9 @@ def create_rag_analyzer_agent(llm: GoToCustomLLM, rag_tool: RAGMilvusTool) -> Ag
     )
 
 
-def create_documentation_writer_agent(llm: GoToCustomLLM) -> Agent:
+def create_learning_path_writer_agent(llm: GoToCustomLLM) -> Agent:
     """
-    Create an agent specialized in writing documentation based on gathered data.
+    Create an agent specialized in writing learning paths based on gathered data.
 
     Args:
         llm: LLM instance (for content generation)
@@ -146,20 +146,75 @@ def create_documentation_writer_agent(llm: GoToCustomLLM) -> Agent:
     Returns:
         Configured Agent instance
     """
-    logger.info(f"Creating {AgentRole.DOCUMENTATION_WRITER} agent")
+    logger.info(f"Creating {AgentRole.LEARNING_PATH_WRITER} agent")
 
     return Agent(
-        role=AgentRole.DOCUMENTATION_WRITER,
-        goal='Generate comprehensive, well-structured documentation in JSON format based on gathered project data',
+        role=AgentRole.LEARNING_PATH_WRITER,
+        goal='Generate a structured Learning Path with valid links that guides users to the right resources for project onboarding',
         backstory=(
-            'You are an expert technical writer with deep knowledge of software architecture '
-            'and documentation best practices. You take raw data about projects and transform it into '
-            'clear, comprehensive documentation that helps developers understand projects quickly. '
-            'You synthesize information from multiple sources including GitLab data, Google Drive '
-            'reference materials, and internal knowledge base to create thorough documentation. '
-            'You always output documentation in valid JSON format with proper structure.'
+            'You are an expert Learning Path architect who creates guided onboarding experiences. '
+            'Your goal is NOT to write comprehensive documentation, but to create a curated learning path '
+            'that tells users WHICH documents, files, and resources to read to understand a project. '
+            'You excel at:\n'
+            '- Extracting and organizing valid links from GitLab, Google Drive, and internal knowledge bases\n'
+            '- Creating clear overview summaries by synthesizing information from multiple sources\n'
+            '- Presenting code snippets with clickable links to the full files\n'
+            '- Highlighting key definitions and important points from reference documents\n'
+            '- Structuring information so users know exactly where to look for deep learning\n\n'
+            'You synthesize information from GitLab data, Google Drive reference materials, '
+            'and internal knowledge base to create a learning path that acts as a roadmap. '
+            'Every section should include valid, clickable links to the actual resources. '
+            'You output clean Markdown format with proper link formatting.'
         ),
-        tools=[],  # No tools - only writes documentation based on previous agents' output
+        tools=[],  # No tools - only writes learning paths based on previous agents' output
+        llm=llm,
+        verbose=True,
+        allow_delegation=False
+    )
+
+# Backward compatibility alias
+create_documentation_writer_agent = create_learning_path_writer_agent
+
+
+def create_code_qa_agent(llm: GoToCustomLLM, code_qa_tool: GitLabCodeQATool) -> Agent:
+    """
+    Create an agent specialized in answering questions about repository code.
+
+    Args:
+        llm: LLM instance (should support tool calling)
+        code_qa_tool: GitLab Code Q&A tool instance
+
+    Returns:
+        Configured Agent instance
+    """
+    logger.info(f"Creating {AgentRole.CODE_QA_AGENT} agent")
+
+    return Agent(
+        role=AgentRole.CODE_QA_AGENT,
+        goal='ONLY use the GitLab Code Q&A tool to fetch code files and answer questions about the codebase. NEVER make up or assume code implementations.',
+        backstory=(
+            'You are a code analysis expert who helps developers understand codebases. '
+            'CRITICAL RULES YOU MUST FOLLOW:\n'
+            '1. You MUST call the GitLab Code Q&A tool for EVERY question - NO EXCEPTIONS\n'
+            '2. You MUST ONLY analyze code that appears in the tool response - NOTHING ELSE\n'
+            '3. You are FORBIDDEN from using your training data or making assumptions about code\n'
+            '4. You are FORBIDDEN from fabricating, inferring, or "filling in" missing code\n'
+            '5. If the tool returns an error or no data, you MUST report: "No code files found"\n'
+            '6. You MUST wait for the tool response before providing ANY answer\n'
+            '7. You MUST include file links in your response as proof\n\n'
+            'VERIFICATION: Before responding, ask yourself:\n'
+            '- Did I call the GitLab Code Q&A tool? If NO → STOP and call it now\n'
+            '- Is this code from the tool response? If NO → DELETE it from your response\n'
+            '- Am I making any assumptions about code? If YES → REMOVE them immediately\n\n'
+            'Your job is to:\n'
+            '- Fetch relevant code files using the tool\n'
+            '- Analyze ONLY the code provided by the tool\n'
+            '- Answer the question based on actual code content\n'
+            '- Provide links to the relevant files for reference\n'
+            '- Summarize findings with specific code examples (quoted from tool response)\n\n'
+            'IMPORTANT: You are a strict code analyzer. You ONLY work with actual code from the repository.'
+        ),
+        tools=[code_qa_tool],
         llm=llm,
         verbose=True,
         allow_delegation=False
