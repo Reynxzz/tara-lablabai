@@ -27,11 +27,12 @@ class GitLabCodeQATool(BaseTool):
 
     name: str = "GitLab Code Q&A"
     description: str = (
-        "Answers questions about GitLab repository code by fetching and analyzing Python files. "
-        "Use this when you need to understand specific aspects of the codebase like feature processing, "
-        "data transformations, architecture patterns, or implementation details. "
+        "⚠️ ONLY FOR ANSWERING SPECIFIC CODE QUESTIONS - NOT FOR LEARNING PATH GENERATION ⚠️\n"
+        "This tool answers specific questions about repository code by deep-diving into Python files. "
+        "DO NOT use this tool for learning path generation - use 'GitLab Project Analyzer' instead. "
+        "ONLY use this when a user asks a specific question like 'What feature processing does this do?' "
         "Input requires: project path, question, and optional directory (default: src). "
-        "Returns code files with content and links for reference."
+        "Returns: code files with full content and links for answering the specific question asked."
     )
     args_schema: Type[BaseModel] = GitLabCodeQAToolSchema
 

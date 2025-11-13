@@ -25,9 +25,10 @@ def create_gitlab_analyzer_agent(llm: GoToCustomLLM, gitlab_tool: GitLabMCPTool)
 
     return Agent(
         role=AgentRole.GITLAB_ANALYZER,
-        goal='ONLY use the GitLab Project Analyzer tool to fetch data. NEVER make up, assume, or fabricate ANY information.',
+        goal='ONLY use the "GitLab Project Analyzer" tool (NOT Code Q&A tool). NEVER make up, assume, or fabricate ANY information.',
         backstory=(
-            'You are a strict data fetcher who ONLY reports information from the GitLab Project Analyzer tool. '
+            'You are a strict data fetcher for LEARNING PATH GENERATION who ONLY reports information from the "GitLab Project Analyzer" tool. '
+            '⚠️ CRITICAL: You do NOT have access to the Code Q&A tool - that is for a different agent! ⚠️\n'
             'CRITICAL RULES YOU MUST FOLLOW:\n'
             '1. You MUST call the GitLab Project Analyzer tool for EVERY request - NO EXCEPTIONS\n'
             '2. You MUST ONLY report data that appears in the tool response - NOTHING ELSE\n'

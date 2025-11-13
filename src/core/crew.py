@@ -144,7 +144,9 @@ class DocumentationCrew:
         """Create a task for fetching GitLab project data."""
         return Task(
             description=(
-                f'TASK: Fetch comprehensive data from the GitLab project "{project}".\n\n'
+                f'TASK: Fetch comprehensive data from the GitLab project "{project}" for LEARNING PATH GENERATION.\n\n'
+                f'⚠️ CRITICAL: Use "GitLab Project Analyzer" tool - NOT "GitLab Code Q&A" tool ⚠️\n'
+                f'The Code Q&A tool is for answering specific questions, NOT for learning path generation.\n\n'
                 f'CRITICAL REQUIREMENT: You MUST call the "GitLab Project Analyzer" tool with the project path "{project}". '
                 f'Do NOT attempt to provide information from your knowledge base. '
                 f'Do NOT skip the tool call. '
@@ -169,14 +171,16 @@ class DocumentationCrew:
             ),
             expected_output=(
                 'A comprehensive report that begins with confirmation of tool usage, followed by all fetched GitLab project data including:\n'
-                '- Confirmation: "Tool called successfully with project: {project}"\n'
+                '- Confirmation: "GitLab Project Analyzer tool called successfully with project: {project}"\n'
+                '- Verify you called the correct tool (should return project metadata, NOT deep code analysis)\n'
                 '- Raw tool response data\n'
                 '- Project metadata (name, description, default branch, visibility, license, URL)\n'
                 '- Community metrics (stars, forks, issues)\n'
                 '- File structure and key files\n'
                 '- Code snippets with links to full files (from code_snippets field in tool response)\n'
                 '- Recent activity and commits with contributor names\n'
-                '- Any additional relevant information from the project'
+                '- Any additional relevant information from the project\n'
+                '- NEVER include deep code analysis from src/ directory (that is for Code Q&A tool)'
             ),
             agent=agent
         )

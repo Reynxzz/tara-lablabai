@@ -28,9 +28,12 @@ class GitLabMCPTool(BaseTool):
 
     name: str = "GitLab Project Analyzer"
     description: str = (
-        "Analyzes GitLab projects to extract information about code structure, "
-        "files, commits, and merge requests. Useful for generating comprehensive documentation. "
-        "Input should be the project namespace and name in format 'namespace/project'."
+        "⚠️ THIS IS THE PRIMARY GITLAB TOOL FOR LEARNING PATH GENERATION ⚠️\n"
+        "Analyzes GitLab projects to extract metadata, file structure, commits, README, and code snippets. "
+        "Use this tool for: learning path generation, project overview, contributor info, and file structure. "
+        "DO NOT use this for answering specific code questions - use the Code Q&A tool for that. "
+        "Input should be the project namespace and name in format 'namespace/project'. "
+        "Returns: project info, file structure, commits, README, and code snippets."
     )
     args_schema: Type[BaseModel] = GitLabMCPToolSchema
 
