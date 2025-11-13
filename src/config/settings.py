@@ -11,16 +11,16 @@ load_dotenv()
 @dataclass
 class GitLabConfig:
     """GitLab configuration"""
-    token: str
+    token: Optional[str]
     url: str
 
     @classmethod
-    def from_env(cls) -> "GitLabConfig":
-        token = os.getenv("GITLAB_TOKEN")
+    def from_env(cls, runtime_token: Optional[str] = None) -> "GitLabConfig":
+        token = runtime_token or os.getenv("GITLAB_TOKEN")
         url = os.getenv("GITLAB_URL", "https://source.golabs.io")
 
         if not token:
-            raise ValueError("GITLAB_TOKEN environment variable is required")
+            raise ValueError("GITLAB_TOKEN is required (either from environment or runtime)")
 
         return cls(token=token, url=url)
 
@@ -32,9 +32,9 @@ class GoogleDriveConfig:
     mcp_url: str
 
     @classmethod
-    def from_env(cls) -> "GoogleDriveConfig":
+    def from_env(cls, runtime_token: Optional[str] = None) -> "GoogleDriveConfig":
         return cls(
-            token=os.getenv("GOOGLE_DRIVE_TOKEN"),
+            token=runtime_token or os.getenv("GOOGLE_DRIVE_TOKEN"),
             mcp_url=os.getenv("MCP_DRIVE_URL", "drive.taraai.tech")
         )
 
@@ -88,11 +88,11 @@ class Settings:
     rag: RAGConfig
 
     @classmethod
-    def load(cls) -> "Settings":
-        """Load all settings from environment"""
+    def load(cls, gitlab_token: Optional[str] = None, drive_token: Optional[str] = None) -> "Settings":
+        """Load all settings from environment or runtime parameters"""
         return cls(
-            gitlab=GitLabConfig.from_env(),
-            google_drive=GoogleDriveConfig.from_env(),
+            gitlab=GitLabConfig.from_env(runtime_token=gitlab_token),
+            google_drive=GoogleDriveConfig.from_env(runtime_token=drive_token),
             llm=LLMConfig.from_env(),
             rag=RAGConfig.from_env()
         )
@@ -102,9 +102,9 @@ class Settings:
 settings: Optional[Settings] = None
 
 
-def get_settings() -> Settings:
+def get_settings(gitlab_token: Optional[str] = None, drive_token: Optional[str] = None, force_reload: bool = False) -> Settings:
     """Get or create global settings instance"""
     global settings
-    if settings is None:
-        settings = Settings.load()
+    if settings is None or force_reload or gitlab_token or drive_token:
+        settings = Settings.load(gitlab_token=gitlab_token, drive_token=drive_token)
     return settings

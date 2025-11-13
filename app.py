@@ -2,7 +2,10 @@
 import streamlit as st
 import sys
 import os
+import requests
 from pathlib import Path
+from urllib.parse import quote_plus
+from typing import List, Dict, Any
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -10,8 +13,123 @@ sys.path.insert(0, str(Path(__file__).parent))
 from src.core.crew import DocumentationCrew, extract_markdown_from_response
 from src.utils.logger import setup_logger
 from src.utils.validators import validate_gitlab_project
+from src.config.settings import get_settings
 
 logger = setup_logger(__name__)
+
+# Initialize session state
+if 'authenticated' not in st.session_state:
+    st.session_state.authenticated = False
+if 'gitlab_token' not in st.session_state:
+    st.session_state.gitlab_token = ""
+if 'drive_token' not in st.session_state:
+    st.session_state.drive_token = ""
+if 'user_projects' not in st.session_state:
+    st.session_state.user_projects = []
+if 'gitlab_url' not in st.session_state:
+    st.session_state.gitlab_url = os.getenv("GITLAB_URL", "https://source.golabs.io")
+
+
+def fetch_user_projects(gitlab_token: str, gitlab_url: str) -> List[Dict[str, Any]]:
+    """
+    Fetch all projects accessible by the user from GitLab API.
+
+    Args:
+        gitlab_token: GitLab personal access token
+        gitlab_url: GitLab instance URL
+
+    Returns:
+        List of project dictionaries with id, name, and path_with_namespace
+    """
+    try:
+        headers = {'PRIVATE-TOKEN': gitlab_token}
+        projects = []
+        page = 1
+        per_page = 100
+
+        while True:
+            url = f'{gitlab_url}/api/v4/projects'
+            response = requests.get(
+                url,
+                headers=headers,
+                params={
+                    'membership': True,  # Only projects user is a member of
+                    'per_page': per_page,
+                    'page': page,
+                    'order_by': 'last_activity_at',
+                    'sort': 'desc'
+                },
+                timeout=30
+            )
+
+            if response.status_code != 200:
+                logger.error(f"Failed to fetch projects: HTTP {response.status_code} - {response.text[:200]}")
+                return []
+
+            try:
+                page_projects = response.json()
+            except Exception as e:
+                logger.error(f"Failed to parse JSON response: {e}")
+                return []
+
+            if not page_projects:
+                break
+
+            if not isinstance(page_projects, list):
+                logger.error(f"Unexpected response format: {type(page_projects)}")
+                return []
+
+            for project in page_projects:
+                # Skip if project is None or doesn't have required fields
+                if not project or not isinstance(project, dict):
+                    continue
+
+                path_with_namespace = project.get('path_with_namespace')
+                if not path_with_namespace:
+                    continue
+
+                description = project.get('description', '') or ''
+                projects.append({
+                    'id': project.get('id'),
+                    'name': project.get('name'),
+                    'path_with_namespace': path_with_namespace,
+                    'description': description[:100] if description else '',  # Truncate description
+                    'last_activity_at': project.get('last_activity_at', '')
+                })
+
+            # Check if there are more pages
+            if len(page_projects) < per_page:
+                break
+            page += 1
+
+        logger.info(f"Fetched {len(projects)} projects for user")
+        return projects
+
+    except Exception as e:
+        logger.error(f"Error fetching user projects: {e}")
+        return []
+
+
+def verify_gitlab_token(gitlab_token: str, gitlab_url: str) -> bool:
+    """
+    Verify if the GitLab token is valid by making a test API call.
+
+    Args:
+        gitlab_token: GitLab personal access token
+        gitlab_url: GitLab instance URL
+
+    Returns:
+        True if token is valid, False otherwise
+    """
+    try:
+        headers = {'PRIVATE-TOKEN': gitlab_token}
+        url = f'{gitlab_url}/api/v4/user'
+        response = requests.get(url, headers=headers, timeout=10)
+        return response.status_code == 200
+    except Exception as e:
+        logger.error(f"Error verifying GitLab token: {e}")
+        return False
+
 
 # Page configuration
 st.set_page_config(
@@ -66,16 +184,110 @@ st.markdown("""
 st.markdown('<div class="main-header">📚 GitLab Documentation Generator</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-header">AI-powered documentation generation for GitLab projects using multi-agent collaboration</div>', unsafe_allow_html=True)
 
+# Login page - shown if not authenticated
+if not st.session_state.authenticated:
+    st.markdown("---")
+    st.markdown("### 🔐 Login")
+    st.info("Please enter your GitLab token and optionally your Google Drive token to get started.")
+
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.markdown("#### GitLab Authentication")
+        gitlab_token_input = st.text_input(
+            "GitLab Personal Access Token",
+            type="password",
+            placeholder="glpat-xxxxxxxxxxxxxxxxxxxx",
+            help="Enter your GitLab personal access token. This token will be used to fetch your accessible projects."
+        )
+
+    with col2:
+        st.markdown("#### Google Drive Authentication (Optional)")
+        drive_token_input = st.text_input(
+            "Google Drive Token",
+            type="password",
+            placeholder="Enter your Drive token (optional)",
+            help="Optional: Enter your Google Drive token to enable Drive search integration."
+        )
+
+    if st.button("🚀 Login and Load Projects", type="primary", use_container_width=True):
+        if not gitlab_token_input:
+            st.error("⚠️ GitLab token is required!")
+        else:
+            with st.spinner("Verifying GitLab token and fetching your projects..."):
+                # Verify GitLab token
+                if not verify_gitlab_token(gitlab_token_input, st.session_state.gitlab_url):
+                    st.error("❌ Invalid GitLab token. Please check your token and try again.")
+                else:
+                    # Fetch user projects
+                    projects = fetch_user_projects(gitlab_token_input, st.session_state.gitlab_url)
+
+                    if not projects:
+                        st.warning("⚠️ No projects found or error fetching projects. Please check your token permissions.")
+                    else:
+                        # Store tokens and projects in session state
+                        st.session_state.gitlab_token = gitlab_token_input
+                        st.session_state.drive_token = drive_token_input
+                        st.session_state.user_projects = projects
+                        st.session_state.authenticated = True
+                        st.success(f"✅ Successfully authenticated! Found {len(projects)} accessible projects.")
+                        st.rerun()
+
+    st.markdown("---")
+    st.markdown("""
+    **How to get your GitLab Personal Access Token:**
+    1. Go to your GitLab instance → User Settings → Access Tokens
+    2. Create a new token with `read_api` and `read_repository` scopes
+    3. Copy the token and paste it above
+    """)
+
+    # Stop rendering the rest of the page
+    st.stop()
+
+# Logout button in sidebar for authenticated users
 # Sidebar
 with st.sidebar:
     st.header("⚙️ Configuration")
 
+    # User info and logout
+    st.markdown("### 👤 User Session")
+    col_logout1, col_logout2 = st.columns([2, 1])
+    with col_logout1:
+        st.success("✅ Authenticated")
+    with col_logout2:
+        if st.button("➜]"):
+            st.session_state.authenticated = False
+            st.session_state.gitlab_token = ""
+            st.session_state.drive_token = ""
+            st.session_state.user_projects = []
+            st.rerun()
+
     st.markdown("### Project Settings")
-    project_input = st.text_input(
-        "GitLab Project",
-        placeholder="namespace/project-name",
-        help="Enter the GitLab project in format: namespace/project-name"
-    )
+
+    # Create a searchable list of projects
+    if st.session_state.user_projects:
+        # Create options for selectbox
+        project_options = [""] + [p['path_with_namespace'] for p in st.session_state.user_projects]
+        project_names = ["-- Select a project --"] + [
+            f"{p['path_with_namespace']}" + (f" - {p['description'][:50]}..." if p['description'] else "")
+            for p in st.session_state.user_projects
+        ]
+
+        # Searchable selectbox
+        selected_index = st.selectbox(
+            "Select GitLab Project",
+            range(len(project_options)),
+            format_func=lambda i: project_names[i],
+            help="Search and select a project from your accessible projects"
+        )
+
+        project_input = project_options[selected_index]
+
+        # Show project count
+        st.caption(f"📊 {len(st.session_state.user_projects)} projects available")
+    else:
+        st.warning("No projects loaded. Please logout and login again.")
+        project_input = ""
 
     st.markdown("### Integration Options")
     enable_drive = st.checkbox(
@@ -202,9 +414,16 @@ if generate_button:
                 progress_bar = st.progress(0)
                 status_text = st.empty()
 
-                # Initialize crew
+                # Initialize crew with runtime tokens
                 status_text.text("Initializing documentation crew...")
                 progress_bar.progress(10)
+
+                # Configure settings with runtime tokens
+                get_settings(
+                    gitlab_token=st.session_state.gitlab_token,
+                    drive_token=st.session_state.drive_token if enable_drive else None,
+                    force_reload=True
+                )
 
                 doc_crew = DocumentationCrew(
                     enable_google_drive=enable_drive,
