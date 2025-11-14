@@ -1,6 +1,5 @@
 """Agent factory functions for creating CrewAI agents"""
 from crewai import Agent
-from typing import List, Optional
 
 from src.tools import GitLabMCPTool, GoogleDriveMCPTool, RAGMilvusTool, GitLabCodeQATool
 from src.llm import GoToCustomLLM
