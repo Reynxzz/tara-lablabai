@@ -1,6 +1,6 @@
-"""Custom LLM implementation for GoToCompany's LiteLLM endpoint"""
-import requests
+"""Custom LLM implementation using OpenAI API"""
 from typing import Any, List, Optional, Union, Dict
+from openai import OpenAI
 from crewai.llm import BaseLLM
 
 from src.utils.logger import setup_logger
@@ -8,29 +8,28 @@ from src.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 
-class GoToCustomLLM(BaseLLM):
+class OpenAILLM(BaseLLM):
     """
-    Custom LLM implementation for GoToCompany's LiteLLM proxy endpoint.
+    Custom LLM implementation using OpenAI API.
 
-    This bypasses LiteLLM's provider detection by making direct HTTP calls
-    to the endpoint without authentication headers.
+    Uses the OpenAI Python SDK to make API calls to GPT models.
     """
 
     def __init__(
         self,
         model: str,
-        endpoint: str,
+        api_key: str,
         temperature: float = 0.6,
         max_tokens: Optional[int] = None,
         timeout: int = 300,
         supports_tools: bool = False
     ):
         """
-        Initialize the GoToCompany custom LLM.
+        Initialize the OpenAI LLM.
 
         Args:
-            model: The model name to use
-            endpoint: The base URL of the LiteLLM proxy
+            model: The model name to use (e.g., gpt-4o, gpt-4o-mini)
+            api_key: OpenAI API key
             temperature: Sampling temperature (0.0-1.0)
             max_tokens: Maximum tokens to generate
             timeout: Request timeout in seconds
@@ -38,14 +37,16 @@ class GoToCustomLLM(BaseLLM):
         """
         super().__init__(model=model, temperature=temperature)
 
-        self.endpoint = endpoint.rstrip('/')
+        self.api_key = api_key
         self.max_tokens = max_tokens
         self.timeout = timeout
         self._supports_tools = supports_tools
 
+        # Initialize OpenAI client
+        self.client = OpenAI(api_key=api_key, timeout=timeout)
+
         logger.info(
-            f"Initialized GoToCustomLLM: model={model}, "
-            f"endpoint={endpoint}, supports_tools={supports_tools}"
+            f"Initialized OpenAILLM: model={model}, supports_tools={supports_tools}"
         )
 
     def call(
@@ -55,7 +56,7 @@ class GoToCustomLLM(BaseLLM):
         **kwargs
     ) -> str:
         """
-        Make a call to the custom LLM endpoint.
+        Make a call to the OpenAI API.
 
         Args:
             messages: Either a string or list of message dicts with role/content
@@ -72,55 +73,34 @@ class GoToCustomLLM(BaseLLM):
         if isinstance(messages, str):
             messages = [{"role": "user", "content": messages}]
 
-        # Prepare the payload
-        payload = {
+        # Prepare the parameters
+        params = {
             "model": self.model,
             "messages": messages,
             "temperature": kwargs.get("temperature", self.temperature),
-            "stream": False
         }
 
         # Add optional parameters
         if self.max_tokens:
-            payload["max_tokens"] = self.max_tokens
+            params["max_tokens"] = self.max_tokens
 
         if "max_tokens" in kwargs:
-            payload["max_tokens"] = kwargs["max_tokens"]
+            params["max_tokens"] = kwargs["max_tokens"]
 
         if "stop" in kwargs:
-            payload["stop"] = kwargs["stop"]
-
-        # Make the request WITHOUT authorization header
-        headers = {"Content-Type": "application/json"}
+            params["stop"] = kwargs["stop"]
 
         try:
-            logger.debug(f"Calling LLM endpoint: {self.endpoint}/chat/completions")
-            response = requests.post(
-                f"{self.endpoint}/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=self.timeout
-            )
-            response.raise_for_status()
+            logger.debug(f"Calling OpenAI API with model: {self.model}")
+            response = self.client.chat.completions.create(**params)
 
-            result = response.json()
-            content = result["choices"][0]["message"]["content"]
+            content = response.choices[0].message.content
 
-            logger.debug(f"LLM response received: {len(content)} characters")
+            logger.debug(f"OpenAI response received: {len(content)} characters")
             return content
 
-        except requests.exceptions.Timeout as e:
-            error_msg = f"Request to {self.endpoint} timed out after {self.timeout}s"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg) from e
-
-        except requests.exceptions.RequestException as e:
-            error_msg = f"Error calling GoToCompany LLM endpoint: {str(e)}"
-            logger.error(error_msg)
-            raise RuntimeError(error_msg) from e
-
-        except (KeyError, IndexError) as e:
-            error_msg = f"Unexpected response format from endpoint: {str(e)}"
+        except Exception as e:
+            error_msg = f"Error calling OpenAI API: {str(e)}"
             logger.error(error_msg)
             raise RuntimeError(error_msg) from e
 
@@ -134,44 +114,47 @@ class GoToCustomLLM(BaseLLM):
 
     def get_context_window_size(self) -> int:
         """Return the context window size for this model."""
+        # GPT-4o and GPT-4o-mini have 128k context window
+        if "gpt-4o" in self.model:
+            return 128000
         return 8192
 
 
-def create_tool_calling_llm(endpoint: str, model: str, temperature: float = 0.3) -> GoToCustomLLM:
+def create_tool_calling_llm(api_key: str, model: str, temperature: float = 0.3) -> OpenAILLM:
     """
     Factory function to create an LLM instance configured for tool calling.
 
     Args:
-        endpoint: LLM endpoint URL
+        api_key: OpenAI API key
         model: Model name
         temperature: Temperature (default: 0.3 for deterministic tool calling)
 
     Returns:
-        Configured GoToCustomLLM instance
+        Configured OpenAILLM instance
     """
-    return GoToCustomLLM(
+    return OpenAILLM(
         model=model,
-        endpoint=endpoint,
+        api_key=api_key,
         temperature=temperature,
         supports_tools=True
     )
 
 
-def create_writing_llm(endpoint: str, model: str, temperature: float = 0.6) -> GoToCustomLLM:
+def create_writing_llm(api_key: str, model: str, temperature: float = 0.6) -> OpenAILLM:
     """
     Factory function to create an LLM instance configured for content writing.
 
     Args:
-        endpoint: LLM endpoint URL
+        api_key: OpenAI API key
         model: Model name
         temperature: Temperature (default: 0.6 for creative writing)
 
     Returns:
-        Configured GoToCustomLLM instance
+        Configured OpenAILLM instance
     """
-    return GoToCustomLLM(
+    return OpenAILLM(
         model=model,
-        endpoint=endpoint,
+        api_key=api_key,
         temperature=temperature,
         supports_tools=False
     )

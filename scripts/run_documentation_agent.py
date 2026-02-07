@@ -10,7 +10,7 @@ sys.path.insert(0, str(src_path))
 
 from src.core import DocumentationCrew
 from src.utils.logger import setup_logger
-from src.utils.validators import validate_gitlab_project
+from src.utils.validators import validate_github_repo
 
 logger = setup_logger(__name__)
 
@@ -18,31 +18,25 @@ logger = setup_logger(__name__)
 def parse_arguments():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
-        description="Generate comprehensive documentation for GitLab projects using AI agents",
+        description="Generate comprehensive documentation for GitHub repositories using AI agents",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Generate documentation for a GitLab project
-  python scripts/run_documentation_agent.py gopay-ds/Growth/my-project
+  # Generate documentation for a GitHub repository
+  python scripts/run_documentation_agent.py owner/repo
 
   # Include Google Drive search for reference documentation
-  python scripts/run_documentation_agent.py gopay-ds/Growth/my-project --with-drive
-
-  # Include internal knowledge base search
-  python scripts/run_documentation_agent.py gopay-ds/Growth/my-project --with-rag
-
-  # Enable all integrations
-  python scripts/run_documentation_agent.py gopay-ds/Growth/my-project --with-drive --with-rag
+  python scripts/run_documentation_agent.py owner/repo --with-drive
 
   # Specify custom output file
-  python scripts/run_documentation_agent.py gopay-ds/Growth/my-project --output my-docs.json
+  python scripts/run_documentation_agent.py owner/repo --output my-docs.md
         """
     )
 
     parser.add_argument(
-        'project',
+        'repo',
         type=str,
-        help='GitLab project in format "namespace/project" (e.g., "gopay-ds/Growth/my-project")'
+        help='GitHub repository in format "owner/repo" (e.g., "facebook/react")'
     )
 
     parser.add_argument(
@@ -52,17 +46,11 @@ Examples:
     )
 
     parser.add_argument(
-        '--with-rag',
-        action='store_true',
-        help='Enable internal knowledge base search using RAG (requires Milvus database)'
-    )
-
-    parser.add_argument(
         '--output',
         '-o',
         type=str,
         default=None,
-        help='Output file path (default: auto-generated from project name)'
+        help='Output file path (default: auto-generated from repository name)'
     )
 
     parser.add_argument(
@@ -84,19 +72,18 @@ def main():
         import logging
         logger.setLevel(logging.DEBUG)
 
-    # Validate project format
-    if not validate_gitlab_project(args.project):
-        logger.error(f"Invalid project format: {args.project}")
-        logger.error("Expected format: namespace/project (e.g., 'gopay-ds/Growth/my-project')")
+    # Validate repository format
+    if not validate_github_repo(args.repo):
+        logger.error(f"Invalid repository format: {args.repo}")
+        logger.error("Expected format: owner/repo (e.g., 'facebook/react')")
         sys.exit(1)
 
     # Print configuration
     print("=" * 80)
-    print(f"Documentation Generation for GitLab Project")
+    print(f"Documentation Generation for GitHub Repository")
     print("=" * 80)
-    print(f"Project: {args.project}")
+    print(f"Repository: {args.repo}")
     print(f"Google Drive integration: {'ENABLED' if args.with_drive else 'DISABLED'}")
-    print(f"RAG integration: {'ENABLED' if args.with_rag else 'DISABLED'}")
     print("=" * 80)
     print()
 
@@ -104,13 +91,12 @@ def main():
         # Create documentation crew
         logger.info("Initializing documentation crew...")
         doc_crew = DocumentationCrew(
-            enable_google_drive=args.with_drive,
-            enable_rag=args.with_rag
+            enable_google_drive=args.with_drive
         )
 
         # Generate documentation
-        logger.info(f"Generating documentation for project: {args.project}")
-        documentation = doc_crew.generate_documentation(args.project)
+        logger.info(f"Generating documentation for repository: {args.repo}")
+        documentation = doc_crew.generate_documentation(args.repo)
 
         # Save to file
         output_file = doc_crew.save_documentation(documentation, args.output)
@@ -118,19 +104,10 @@ def main():
         # Print success message
         print()
         print("=" * 80)
-        print("✅ Documentation generation complete!")
+        print("Documentation generation complete!")
         print("=" * 80)
         print(f"Output saved to: {output_file}")
         print()
-
-        # Print brief summary
-        if isinstance(documentation, dict) and "overview" in documentation:
-            print("📄 Documentation Summary:")
-            overview = documentation.get("overview", {})
-            print(f"  Name: {overview.get('name', 'N/A')}")
-            print(f"  Description: {overview.get('description', 'N/A')[:100]}...")
-            activity = documentation.get("activity", {})
-            print(f"  Activity: {activity.get('stars', 0)} stars, {activity.get('forks', 0)} forks")
 
         return 0
 

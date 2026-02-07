@@ -18,20 +18,20 @@ if requirements_file.exists():
         ]
 
 setup(
-    name="documentation-agent",
-    version="1.0.0",
-    description="AI-powered documentation generation agent for GitLab projects",
+    name="nobuddy",
+    version="2.0.0",
+    description="AI-powered learning path generator for GitHub projects",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    author="GoTo Company",
-    author_email="your.email@goto.com",
-    url="https://source.golabs.io/your-project",
+    author="NoBuddy Team",
+    author_email="nobuddy@example.com",
+    url="https://github.com/nobuddy-team/nobuddy",
     packages=find_packages(include=["src", "src.*"]),
     python_requires=">=3.8",
     install_requires=requirements,
     entry_points={
         'console_scripts': [
-            'doc-agent=scripts.run_documentation_agent:main',
+            'nobuddy=scripts.run_documentation_agent:main',
         ],
     },
     classifiers=[
@@ -44,9 +44,9 @@ setup(
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
     ],
-    keywords="documentation ai crewai gitlab automation",
+    keywords="documentation ai crewai github automation openai",
     project_urls={
-        "Bug Reports": "https://source.golabs.io/your-project/issues",
-        "Source": "https://source.golabs.io/your-project",
+        "Bug Reports": "https://github.com/nobuddy-team/nobuddy/issues",
+        "Source": "https://github.com/nobuddy-team/nobuddy",
     },
 )

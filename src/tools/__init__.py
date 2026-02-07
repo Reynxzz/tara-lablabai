@@ -1,12 +1,10 @@
 """Tools module for CrewAI agents"""
-from src.tools.gitlab_tool import GitLabMCPTool
+from src.tools.github_tool import GitHubTool
 from src.tools.google_drive_tool import GoogleDriveMCPTool
-from src.tools.rag_tool import RAGMilvusTool
-from src.tools.gitlab_code_qa_tool import GitLabCodeQATool
+from src.tools.github_code_qa_tool import GitHubCodeQATool
 
 __all__ = [
-    "GitLabMCPTool",
+    "GitHubTool",
     "GoogleDriveMCPTool",
-    "RAGMilvusTool",
-    "GitLabCodeQATool"
+    "GitHubCodeQATool"
 ]

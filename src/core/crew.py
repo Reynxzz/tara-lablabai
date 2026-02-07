@@ -6,17 +6,16 @@ from crewai import Agent, Task, Crew, Process
 
 from src.config.settings import get_settings
 from src.config.constants import LLMModel, DEFAULT_TEMPERATURE_TOOL_CALLING, DEFAULT_TEMPERATURE_WRITING
-from src.tools import GitLabMCPTool, GoogleDriveMCPTool, RAGMilvusTool, GitLabCodeQATool
+from src.tools import GitHubTool, GoogleDriveMCPTool, GitHubCodeQATool
 from src.llm import create_tool_calling_llm, create_writing_llm
 from src.agents import (
-    create_gitlab_analyzer_agent,
+    create_github_analyzer_agent,
     create_drive_analyzer_agent,
-    create_rag_analyzer_agent,
     create_documentation_writer_agent,
     create_code_qa_agent
 )
 from src.utils.logger import setup_logger
-from src.utils.validators import validate_gitlab_project, sanitize_filename
+from src.utils.validators import validate_github_repo, sanitize_filename
 
 logger = setup_logger(__name__)
 
@@ -63,100 +62,81 @@ def extract_markdown_from_response(response: str) -> str:
 
 class DocumentationCrew:
     """
-    CrewAI setup for generating documentation from GitLab projects using collaborating agents.
+    CrewAI setup for generating documentation from GitHub repositories using collaborating agents.
 
     Architecture:
-    - Agent 1 (GitLab Data Analyzer): Uses gpt-oss LLM with GitLab tool to fetch project data
-    - Agent 2 (Google Drive Analyzer): [Optional] Uses gpt-oss LLM to search Google Drive for reference docs
-    - Agent 3 (RAG Analyzer): [Optional] Uses gpt-oss LLM to search internal knowledge base
-    - Agent 4 (Documentation Writer): Uses sahabat-4bit LLM to write structured JSON documentation
+    - Agent 1 (GitHub Data Analyzer): Uses gpt-4o-mini LLM with GitHub tool to fetch project data
+    - Agent 2 (Google Drive Analyzer): [Optional] Uses gpt-4o-mini LLM to search Google Drive for reference docs
+    - Agent 3 (Documentation Writer): Uses gpt-4o LLM to write structured learning path documentation
 
-    This design leverages gpt-oss for tool calling capabilities and sahabat-4bit for
-    efficient documentation generation.
+    This design leverages gpt-4o-mini for tool calling capabilities (lower cost) and gpt-4o for
+    documentation generation (better quality).
     """
 
     def __init__(
         self,
-        enable_google_drive: bool = False,
-        enable_rag: bool = False
+        enable_google_drive: bool = False
     ):
         """
         Initialize DocumentationCrew with optional integrations.
 
         Args:
             enable_google_drive: Whether to enable Google Drive search for reference documentation
-            enable_rag: Whether to enable internal knowledge base search
         """
         logger.info("Initializing DocumentationCrew")
 
         settings = get_settings()
         self.enable_google_drive = enable_google_drive
-        self.enable_rag = enable_rag
 
         # Initialize tools
         logger.info("Initializing tools...")
-        self.gitlab_tool = GitLabMCPTool()
+        self.github_tool = GitHubTool()
 
         self.drive_tool = None
         if enable_google_drive:
             if settings.google_drive.is_configured():
                 self.drive_tool = GoogleDriveMCPTool()
                 if self.drive_tool.is_available():
-                    logger.info("✅ Google Drive integration enabled")
+                    logger.info("Google Drive integration enabled")
                 else:
-                    logger.warning("⚠️  Google Drive integration disabled (MCP server not reachable)")
+                    logger.warning("Google Drive integration disabled (MCP server not reachable)")
                     self.enable_google_drive = False
             else:
-                logger.warning("⚠️  Google Drive integration disabled (no GOOGLE_DRIVE_TOKEN)")
+                logger.warning("Google Drive integration disabled (no GOOGLE_DRIVE_TOKEN)")
                 self.enable_google_drive = False
-
-        self.rag_tool = None
-        if enable_rag:
-            if settings.rag.is_configured():
-                self.rag_tool = RAGMilvusTool()
-                if self.rag_tool.is_available():
-                    logger.info("✅ RAG Milvus integration enabled")
-                else:
-                    logger.warning("⚠️  RAG Milvus integration disabled (database not available)")
-                    self.enable_rag = False
-            else:
-                logger.warning("⚠️  RAG Milvus integration disabled (database not found)")
-                self.enable_rag = False
 
         # Create LLM instances
         logger.info("Initializing dual-LLM architecture:")
-        logger.info("  - gpt-oss (GPT OSS 120B): Tool calling & data fetching")
-        logger.info("  - sahabat-4bit (Sahabat AI 70B 4-bit): Documentation writing")
+        logger.info("  - gpt-4o-mini: Tool calling & data fetching")
+        logger.info("  - gpt-4o: Documentation writing")
 
-        self.gpt_oss_llm = create_tool_calling_llm(
-            endpoint=settings.llm.endpoint,
-            model=LLMModel.GPT_OSS,
+        self.tool_calling_llm = create_tool_calling_llm(
+            api_key=settings.llm.api_key,
+            model=LLMModel.GPT_4O_MINI,
             temperature=DEFAULT_TEMPERATURE_TOOL_CALLING
         )
 
-        self.sahabat_llm = create_writing_llm(
-            endpoint=settings.llm.endpoint,
-            model=LLMModel.SAHABAT_4BIT,
+        self.writing_llm = create_writing_llm(
+            api_key=settings.llm.api_key,
+            model=LLMModel.GPT_4O,
             temperature=DEFAULT_TEMPERATURE_WRITING
         )
 
-    def _create_gitlab_fetch_task(self, agent: Agent, project: str) -> Task:
-        """Create a task for fetching GitLab project data."""
+    def _create_github_fetch_task(self, agent: Agent, repo: str) -> Task:
+        """Create a task for fetching GitHub repository data."""
         return Task(
             description=(
-                f'TASK: Fetch comprehensive data from the GitLab project "{project}" for LEARNING PATH GENERATION.\n\n'
-                f'⚠️ CRITICAL: Use "GitLab Project Analyzer" tool - NOT "GitLab Code Q&A" tool ⚠️\n'
-                f'The Code Q&A tool is for answering specific questions, NOT for learning path generation.\n\n'
-                f'CRITICAL REQUIREMENT: You MUST call the "GitLab Project Analyzer" tool with the project path "{project}". '
+                f'TASK: Fetch comprehensive data from the GitHub repository "{repo}" for LEARNING PATH GENERATION.\n\n'
+                f'CRITICAL REQUIREMENT: You MUST call the "GitHub Project Analyzer" tool with the repository path "{repo}". '
                 f'Do NOT attempt to provide information from your knowledge base. '
                 f'Do NOT skip the tool call. '
                 f'The tool call is MANDATORY and must be executed first.\n\n'
                 f'STEPS:\n'
-                f'1. IMMEDIATELY call the GitLab Project Analyzer tool with input: {project}\n'
-                f'2. Wait for the tool response containing all project data\n'
+                f'1. IMMEDIATELY call the GitHub Project Analyzer tool with input: {repo}\n'
+                f'2. Wait for the tool response containing all repository data\n'
                 f'3. Parse and present the complete raw data from the tool response\n'
                 f'4. Extract and organize the following information:\n'
-                f'   - Project name, description, default branch, visibility, and license\n'
+                f'   - Repository name, description, default branch, visibility, and license\n'
                 f'   - Stars, forks, open issues count\n'
                 f'   - Topics/tags\n'
                 f'   - Main files and their purposes WITH LINKS\n'
@@ -166,44 +146,42 @@ class DocumentationCrew:
                 f'   - Last activity date\n\n'
                 f'IMPORTANT: Provide ALL the raw data you fetch from the tool. Be thorough and comprehensive. '
                 f'Your output will be used by the Learning Path writer to create the final learning path. '
-                f'Make sure to include all links (project URL, file links from code_snippets section). '
+                f'Make sure to include all links (repository URL, file links from code_snippets section). '
                 f'If you have not called the tool yet, STOP and call it now.'
             ),
             expected_output=(
-                'A comprehensive report that begins with confirmation of tool usage, followed by all fetched GitLab project data including:\n'
-                '- Confirmation: "GitLab Project Analyzer tool called successfully with project: {project}"\n'
-                '- Verify you called the correct tool (should return project metadata, NOT deep code analysis)\n'
+                'A comprehensive report that begins with confirmation of tool usage, followed by all fetched GitHub repository data including:\n'
+                '- Confirmation: "GitHub Project Analyzer tool called successfully with repository: {repo}"\n'
                 '- Raw tool response data\n'
-                '- Project metadata (name, description, default branch, visibility, license, URL)\n'
+                '- Repository metadata (name, description, default branch, visibility, license, URL)\n'
                 '- Community metrics (stars, forks, issues)\n'
                 '- File structure and key files\n'
                 '- Code snippets with links to full files (from code_snippets field in tool response)\n'
                 '- Recent activity and commits with contributor names\n'
-                '- Any additional relevant information from the project\n'
-                '- NEVER include deep code analysis from src/ directory (that is for Code Q&A tool)'
+                '- Any additional relevant information from the repository\n'
             ),
             agent=agent
         )
 
-    def _create_drive_search_task(self, agent: Agent, project: str) -> Task:
+    def _create_drive_search_task(self, agent: Agent, repo: str) -> Task:
         """Create a task for searching Google Drive for reference documentation."""
         return Task(
             description=(
-                f'TASK: Search Google Drive for reference documentation related to the GitLab project "{project}".\n\n'
-                f'CRITICAL REQUIREMENT: You MUST call the "Google Drive Document Analyzer" tool (NOT the GitLab tool). '
-                f'Do NOT confuse GitLab project files with Google Drive documents. '
-                f'Do NOT report GitLab file structure as if it came from Google Drive. '
+                f'TASK: Search Google Drive for reference documentation related to the GitHub repository "{repo}".\n\n'
+                f'CRITICAL REQUIREMENT: You MUST call the "Google Drive Document Analyzer" tool (NOT the GitHub tool). '
+                f'Do NOT confuse GitHub repository files with Google Drive documents. '
+                f'Do NOT report GitHub file structure as if it came from Google Drive. '
                 f'Do NOT fabricate or make up document content. '
                 f'Do NOT skip the tool call. '
                 f'The tool call is MANDATORY and must be executed first.\n\n'
                 f'IMPORTANT DISTINCTION:\n'
-                f'- GitLab tool returns: directories (common, src, config), Python files (.py), config files (.json)\n'
+                f'- GitHub tool returns: directories (common, src, config), Python files (.py), config files (.json)\n'
                 f'- Google Drive tool returns: Google Docs, Google Sheets with names like "DGE Serving Checklist" and URIs like "gdrive:///xxxxx"\n'
                 f'- If you see directories or .py files, you are looking at the WRONG tool output!\n\n'
                 f'STEPS:\n'
-                f'1. IMMEDIATELY call the Google Drive Document Analyzer tool (NOT GitLab) with input: {project}\n'
+                f'1. IMMEDIATELY call the Google Drive Document Analyzer tool (NOT GitHub) with input: {repo}\n'
                 f'2. Wait for the tool response - it should contain Google Docs/Sheets with both "uri" and "url" fields\n'
-                f'3. Verify the response contains Google Drive documents (NOT GitLab files)\n'
+                f'3. Verify the response contains Google Drive documents (NOT GitHub files)\n'
                 f'4. If the tool returns Google Drive documents, extract:\n'
                 f'   - Document names and clickable URLs (use the "url" field, NOT "uri")\n'
                 f'   - The "url" field contains full links like https://docs.google.com/document/d/...\n'
@@ -211,131 +189,67 @@ class DocumentationCrew:
                 f'   - Why each document is relevant (what users will learn from it)\n'
                 f'5. If the tool returns no documents or an error, report exactly: "No relevant documentation found in Google Drive"\n\n'
                 f'VERIFICATION: Before reporting results, confirm:\n'
-                f'- Did I call the Google Drive Document Analyzer tool? (NOT GitLab)\n'
-                f'- Do the results have URIs starting with "gdrive:///"? (NOT GitLab URLs)\n'
+                f'- Did I call the Google Drive Document Analyzer tool? (NOT GitHub)\n'
+                f'- Do the results have URIs starting with "gdrive:///"? (NOT GitHub URLs)\n'
                 f'- Are these Google Docs/Sheets? (NOT Python files or directories)\n'
                 f'If NO to any question above, you are reporting the WRONG tool output!'
             ),
             expected_output=(
                 'A summary that proves Google Drive tool was called correctly:\n'
                 '- Confirmation: "Called Google Drive Document Analyzer tool with query: {query}"\n'
-                '- Number of Google Drive documents found (NOT GitLab files)\n'
+                '- Number of Google Drive documents found (NOT GitHub files)\n'
                 '- For EACH Google Drive document:\n'
                 '  - Name and clickable URL (use the "url" field from tool response, NOT "uri")\n'
                 '  - The "url" field contains the full Google Docs/Sheets link (https://docs.google.com/...)\n'
                 '  - Key definitions or important points extracted from the document\n'
                 '  - Why this document is useful for learning about the project\n'
-                '- Key insights from the Google Drive document content (NOT from GitLab repository)\n'
+                '- Key insights from the Google Drive document content (NOT from GitHub repository)\n'
                 '- If tool returned no results: "No relevant documentation found in Google Drive"\n'
-                '- NEVER report GitLab file structure (common, src, config, .py files) as Google Drive results'
+                '- NEVER report GitHub file structure (common, src, config, .py files) as Google Drive results'
             ),
             agent=agent
         )
 
-    def _create_rag_search_task(self, agent: Agent, project: str) -> Task:
-        """Create a task for searching internal knowledge base."""
-        return Task(
-            description=(
-                f'TASK: Search the internal knowledge base for information relevant to the project "{project}".\n\n'
-                f'⚠️ CRITICAL - DO NOT CONFUSE WITH GITLAB:\n'
-                f'- You are the RAG AGENT, NOT the GitLab agent\n'
-                f'- DO NOT call the GitLab Project Analyzer tool\n'
-                f'- DO NOT fetch GitLab project metadata, files, or commits\n'
-                f'- Your ONLY tool is: "Internal Knowledge Base Search"\n\n'
-                f'CRITICAL REQUIREMENT: You MUST call the "Internal Knowledge Base Search" tool. '
-                f'Do NOT fabricate or make up knowledge base content. '
-                f'Do NOT skip the tool call. '
-                f'Do NOT provide information from memory or training data. '
-                f'The tool call is MANDATORY and must be executed first.\n\n'
-                f'IMPORTANT: The tool searches a single "combined_item" collection that contains data from multiple sources. '
-                f'Each result includes a "source" field indicating its origin (e.g., user_income, dge, genie, pills, push_notifications, etc.).\n\n'
-                f'SMART QUERY EXTRACTION:\n'
-                f'DO NOT search with the full repository name "{project}". Instead, extract the PROJECT NAME from it.\n'
-                f'Known project names in the knowledge base: genie, pills, push notification (pn), user income, dge, ride\n'
-                f'Examples:\n'
-                f'- "gopay-genie-model_pipeline-production" → search for "genie"\n'
-                f'- "gopay-pills-service" → search for "pills"\n'
-                f'- "gopay-dge-ride-model_pipeline-staging" → search for "dge" AND "ride"\n'
-                f'- "gopay-user-income-service" → search for "user income"\n'
-                f'- "gopay-push-notification-api" → search for "push notification" or "pn"\n\n'
-                f'STEPS:\n'
-                f'1. EXTRACT the project name from repository "{project}" (look for keywords: genie, pills, pn, user_income, dge, ride)\n'
-                f'2. IMMEDIATELY call the "Internal Knowledge Base Search" tool with the EXTRACTED project name (NOT the full repo name)\n'
-                f'3. Wait for the tool response - it should have "sources_found" and "source" fields\n'
-                f'4. VERIFY: If you see project_id, files, commits → YOU CALLED THE WRONG TOOL! Call Internal KB Search instead.\n'
-                f'5. If the tool returns results with source fields, summarize ONLY the actual content from the tool response\n'
-                f'6. Report which sources were found (e.g., dge, genie, user_income) and how many results came from each\n'
-                f'7. If the first search returns few results, try ONE additional search with a different keyword variation:\n'
-                f'   - For "dge ride" → try "data engineering" or "ride sharing"\n'
-                f'   - For "pn" → try "push notification"\n'
-                f'8. If no results: "No relevant information found in internal knowledge base"\n\n'
-                f'IMPORTANT: You must ONLY report findings that came from the Internal Knowledge Base Search tool response. '
-                f'If you have not called the tool yet, STOP and call it now. '
-                f'Never fabricate, infer, or make up knowledge base content. '
-                f'Your output will be verified against tool usage logs.'
-            ),
-            expected_output=(
-                'A summary that begins with tool usage confirmation, followed by search results:\n'
-                '- Confirmation: "Extracted project name: [extracted_name] from repository: {project}"\n'
-                '- Confirmation: "Internal Knowledge Base Search tool called with query: [extracted_name]"\n'
-                '- Show what query was used (should be the extracted project name like "genie", NOT the full repo name)\n'
-                '- Collection searched (must be "combined_item" - if you see a project URL, you called the wrong tool!)\n'
-                '- List of sources found in results (e.g., ["dge", "genie", "user_income"])\n'
-                '- Total number of results found (from tool response)\n'
-                '- Key insights based ONLY on tool response content, grouped by source\n'
-                '- How these insights relate to the project (based ONLY on knowledge base results, NOT GitLab data)\n'
-                '- If multiple searches were done, report results from each search\n'
-                '- If tool returned no results: "No relevant information found in internal knowledge base"\n'
-                '- NEVER include GitLab data (project ID, files, commits, README)\n'
-                '- NEVER include fabricated or assumed knowledge base content'
-            ),
-            agent=agent
-        )
-
-    def _create_learning_path_writing_task(self, agent: Agent, project: str) -> Task:
+    def _create_learning_path_writing_task(self, agent: Agent, repo: str) -> Task:
         """Create a task for writing a learning path based on fetched data."""
         return Task(
             description=(
-                f'TASK: Generate a "Learning Path" in Markdown format for the GitLab project "{project}" '
+                f'TASK: Generate a "Learning Path" in Markdown format for the GitHub repository "{repo}" '
                 f'that guides users to the right resources for onboarding.\n\n'
                 f'CRITICAL: This is a LEARNING PATH, not comprehensive documentation. Your goal is to tell users '
                 f'WHICH documents and resources to read, not to explain everything in detail.\n\n'
                 f'STEPS:\n'
-                f'1. Review all data provided by previous agents (GitLab, Google Drive, RAG)\n'
+                f'1. Review all data provided by previous agents (GitHub, Google Drive)\n'
                 f'2. Extract ALL valid links from the agents\' outputs\n'
                 f'3. Create a Learning Path with the structure below:\n\n'
                 f'## Required Learning Path Structure:\n\n'
-                f'# 🎯 Learning Path: [Project Name]\n\n'
-                f'## 📋 Overview\n'
-                f'Synthesize a brief overview from ALL sources (GitLab description, Drive docs, RAG results):\n'
-                f'- What this project does (combine insights from all sources, not just GitLab description)\n'
+                f'# Learning Path: [Project Name]\n\n'
+                f'## Overview\n'
+                f'Synthesize a brief overview from ALL sources (GitHub description, Drive docs):\n'
+                f'- What this project does (combine insights from all sources, not just GitHub description)\n'
                 f'- Key purpose and use cases\n'
                 f'- Technologies used\n'
                 f'- Project metadata: [Project URL](link), License, Default Branch\n\n'
-                f'## 👥 Recent Contributors\n'
+                f'## Recent Contributors\n'
                 f'- List recent commit authors with their latest contributions\n'
                 f'- Include commit titles and dates\n'
-                f'- Keep this section as-is from GitLab data\n\n'
-                f'## 📁 Repository Structure\n'
+                f'- Keep this section as-is from GitHub data\n\n'
+                f'## Repository Structure\n'
                 f'List key directories and files with **clickable links**:\n'
-                f'- [filename](https://source.golabs.io/[project]/-/blob/[branch]/[filepath]) - Brief purpose\n'
+                f'- [filename](https://github.com/[owner]/[repo]/blob/[branch]/[filepath]) - Brief purpose\n'
                 f'- Focus on important entry points and configuration files\n\n'
-                f'## 💻 Code Snippets (First Look)\n'
-                f'Show code snippets from key files (if available from GitLab tool):\n'
+                f'## Code Snippets (First Look)\n'
+                f'Show code snippets from key files (if available from GitHub tool):\n'
                 f'- Display the snippet with syntax highlighting\n'
                 f'- Include link to full file: [View full file](link)\n'
                 f'- Brief explanation of what this file does\n\n'
-                f'## 📚 Reference Documentation\n'
+                f'## Reference Documentation\n'
                 f'**From Google Drive** (if available):\n'
                 f'- [Document Name](url) - Use the "url" field from Drive tool results (NOT "uri")\n'
                 f'- The "url" field contains clickable Google Docs/Sheets links (https://docs.google.com/...)\n'
                 f'- Extract important definitions, concepts, or guidelines mentioned in the Drive search results\n'
                 f'- Tell users WHY they should read each document\n\n'
-                f'**From Internal Knowledge Base** (if available):\n'
-                f'- Relevant context from internal systems (mention the source field)\n'
-                f'- How this project relates to company infrastructure\n'
-                f'- Links to related internal resources if mentioned\n\n'
-                f'## 🚀 Getting Started\n'
+                f'## Getting Started\n'
                 f'Guide users to the right resources:\n'
                 f'- "Start by reading [README](link)"\n'
                 f'- "Check configuration in [config file](link)"\n'
@@ -352,8 +266,8 @@ class DocumentationCrew:
             ),
             expected_output=(
                 'A complete Learning Path in Markdown with:\n'
-                '- Project overview synthesized from GitLab, Drive, and RAG sources\n'
-                '- Recent contributors section (unchanged from GitLab)\n'
+                '- Project overview synthesized from GitHub and Drive sources\n'
+                '- Recent contributors section (unchanged from GitHub)\n'
                 '- Repository structure with clickable file links\n'
                 '- Code snippets with links to full files\n'
                 '- Reference documentation with key points/definitions extracted\n'
@@ -368,64 +282,54 @@ class DocumentationCrew:
     # Backward compatibility alias
     _create_documentation_writing_task = _create_learning_path_writing_task
 
-    def generate_documentation(self, project: str) -> Dict:
+    def generate_documentation(self, repo: str) -> Dict:
         """
-        Generate documentation for a given GitLab project using collaborating agents.
+        Generate documentation for a given GitHub repository using collaborating agents.
 
         Args:
-            project: GitLab project in format 'namespace/project'
+            repo: GitHub repository in format 'owner/repo'
 
         Returns:
             Dictionary containing the generated documentation
 
         Raises:
-            ValueError: If project format is invalid
+            ValueError: If repository format is invalid
         """
-        if not validate_gitlab_project(project):
-            raise ValueError(f"Invalid project format: {project}. Expected format: namespace/project")
+        if not validate_github_repo(repo):
+            raise ValueError(f"Invalid repository format: {repo}. Expected format: owner/repo")
 
         # Calculate agent count
-        agent_count = 2  # GitLab + Writer (minimum)
+        agent_count = 2  # GitHub + Writer (minimum)
         if self.enable_google_drive:
-            agent_count += 1
-        if self.enable_rag:
             agent_count += 1
 
         logger.info("=" * 60)
-        logger.info(f"Starting {agent_count}-agent collaboration for project: {project}")
-        logger.info(f"  Agent 1 (gpt-oss): Fetching GitLab data with code snippets...")
+        logger.info(f"Starting {agent_count}-agent collaboration for repository: {repo}")
+        logger.info(f"  Agent 1 (gpt-4o-mini): Fetching GitHub data with code snippets...")
         if self.enable_google_drive:
-            logger.info(f"  Agent 2 (gpt-oss): Searching Google Drive for reference docs...")
-        if self.enable_rag:
-            logger.info(f"  Agent {3 if self.enable_google_drive else 2} (gpt-oss): Searching internal knowledge base...")
-        logger.info(f"  Agent {agent_count} (sahabat-4bit): Writing learning path...")
+            logger.info(f"  Agent 2 (gpt-4o-mini): Searching Google Drive for reference docs...")
+        logger.info(f"  Agent {agent_count} (gpt-4o): Writing learning path...")
         logger.info("=" * 60)
 
         # Create agents and tasks
         agents: List[Agent] = []
         tasks: List[Task] = []
 
-        # GitLab analyzer agent and task (required)
-        gitlab_analyzer = create_gitlab_analyzer_agent(self.gpt_oss_llm, self.gitlab_tool)
-        agents.append(gitlab_analyzer)
-        tasks.append(self._create_gitlab_fetch_task(gitlab_analyzer, project))
+        # GitHub analyzer agent and task (required)
+        github_analyzer = create_github_analyzer_agent(self.tool_calling_llm, self.github_tool)
+        agents.append(github_analyzer)
+        tasks.append(self._create_github_fetch_task(github_analyzer, repo))
 
         # Google Drive analyzer agent and task (optional)
         if self.enable_google_drive and self.drive_tool:
-            drive_analyzer = create_drive_analyzer_agent(self.gpt_oss_llm, self.drive_tool)
+            drive_analyzer = create_drive_analyzer_agent(self.tool_calling_llm, self.drive_tool)
             agents.append(drive_analyzer)
-            tasks.append(self._create_drive_search_task(drive_analyzer, project))
-
-        # RAG analyzer agent and task (optional)
-        if self.enable_rag and self.rag_tool:
-            rag_analyzer = create_rag_analyzer_agent(self.gpt_oss_llm, self.rag_tool)
-            agents.append(rag_analyzer)
-            tasks.append(self._create_rag_search_task(rag_analyzer, project))
+            tasks.append(self._create_drive_search_task(drive_analyzer, repo))
 
         # Documentation writer agent and task (required)
-        doc_writer = create_documentation_writer_agent(self.sahabat_llm)
+        doc_writer = create_documentation_writer_agent(self.writing_llm)
         agents.append(doc_writer)
-        tasks.append(self._create_documentation_writing_task(doc_writer, project))
+        tasks.append(self._create_documentation_writing_task(doc_writer, repo))
 
         # Create crew with sequential process
         crew = Crew(
@@ -444,7 +348,7 @@ class DocumentationCrew:
 
         logger.info("Successfully generated Learning Path in Markdown format")
         return {
-            "project": project,
+            "repository": repo,
             "documentation": markdown_content,
             "format": "markdown"
         }
@@ -461,11 +365,11 @@ class DocumentationCrew:
             Path to the saved file
         """
         if not output_file:
-            project = documentation.get("project", "unknown")
-            safe_project = sanitize_filename(project.replace('/', '_'))
+            repo = documentation.get("repository", "unknown")
+            safe_repo = sanitize_filename(repo.replace('/', '_'))
             doc_format = documentation.get("format", "markdown")
             extension = ".md" if doc_format == "markdown" else ".txt"
-            output_file = f"learning_path_{safe_project}{extension}"
+            output_file = f"learning_path_{safe_repo}{extension}"
 
         # Get the documentation content
         content = documentation.get("documentation", "")
@@ -476,12 +380,12 @@ class DocumentationCrew:
         logger.info(f"Learning path saved to {output_file}")
         return output_file
 
-    def answer_code_question(self, project: str, question: str, directory: str = "src") -> Dict:
+    def answer_code_question(self, repo: str, question: str, directory: str = "src") -> Dict:
         """
         Answer a specific question about the repository code.
 
         Args:
-            project: GitLab project in format 'namespace/project'
+            repo: GitHub repository in format 'owner/repo'
             question: Question about the codebase
             directory: Directory to search (default: src)
 
@@ -489,34 +393,34 @@ class DocumentationCrew:
             Dictionary containing the answer and relevant code references
 
         Raises:
-            ValueError: If project format is invalid
+            ValueError: If repository format is invalid
         """
-        if not validate_gitlab_project(project):
-            raise ValueError(f"Invalid project format: {project}. Expected format: namespace/project")
+        if not validate_github_repo(repo):
+            raise ValueError(f"Invalid repository format: {repo}. Expected format: owner/repo")
 
         logger.info("=" * 60)
-        logger.info(f"Code Q&A for project: {project}")
+        logger.info(f"Code Q&A for repository: {repo}")
         logger.info(f"Question: {question}")
         logger.info(f"Searching in: {directory}/")
         logger.info("=" * 60)
 
         # Initialize Code Q&A tool
-        code_qa_tool = GitLabCodeQATool()
+        code_qa_tool = GitHubCodeQATool()
 
         # Create Code Q&A agent with tool calling LLM
-        code_qa_agent = create_code_qa_agent(self.gpt_oss_llm, code_qa_tool)
+        code_qa_agent = create_code_qa_agent(self.tool_calling_llm, code_qa_tool)
 
         # Create task for answering the question
         qa_task = Task(
             description=(
-                f'TASK: Answer the following question about the GitLab project "{project}":\n\n'
+                f'TASK: Answer the following question about the GitHub repository "{repo}":\n\n'
                 f'Question: {question}\n\n'
-                f'CRITICAL REQUIREMENT: You MUST call the "GitLab Code Q&A" tool with:\n'
-                f'- project: {project}\n'
+                f'CRITICAL REQUIREMENT: You MUST call the "GitHub Code Q&A" tool with:\n'
+                f'- repo: {repo}\n'
                 f'- question: {question}\n'
                 f'- directory: {directory}\n\n'
                 f'STEPS:\n'
-                f'1. IMMEDIATELY call the GitLab Code Q&A tool with the parameters above\n'
+                f'1. IMMEDIATELY call the GitHub Code Q&A tool with the parameters above\n'
                 f'2. Wait for the tool response containing code files\n'
                 f'3. Analyze ONLY the code provided by the tool\n'
                 f'4. Answer the question based on actual code content\n'
@@ -556,7 +460,7 @@ class DocumentationCrew:
 
         logger.info("Successfully answered code question")
         return {
-            "project": project,
+            "repository": repo,
             "question": question,
             "directory": directory,
             "answer": result_str

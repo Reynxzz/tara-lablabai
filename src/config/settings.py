@@ -9,20 +9,20 @@ load_dotenv()
 
 
 @dataclass
-class GitLabConfig:
-    """GitLab configuration"""
+class GitHubConfig:
+    """GitHub configuration"""
     token: Optional[str]
-    url: str
+    api_url: str
 
     @classmethod
-    def from_env(cls, runtime_token: Optional[str] = None) -> "GitLabConfig":
-        token = runtime_token or os.getenv("GITLAB_TOKEN")
-        url = os.getenv("GITLAB_URL", "https://source.golabs.io")
+    def from_env(cls, runtime_token: Optional[str] = None) -> "GitHubConfig":
+        token = runtime_token or os.getenv("GITHUB_TOKEN")
+        api_url = os.getenv("GITHUB_API_URL", "https://api.github.com")
 
         if not token:
-            raise ValueError("GITLAB_TOKEN is required (either from environment or runtime)")
+            raise ValueError("GITHUB_TOKEN is required (either from environment or runtime)")
 
-        return cls(token=token, url=url)
+        return cls(token=token, api_url=api_url)
 
 
 @dataclass
@@ -45,56 +45,36 @@ class GoogleDriveConfig:
 
 @dataclass
 class LLMConfig:
-    """LLM endpoint configuration"""
-    endpoint: str
+    """LLM configuration for OpenAI"""
+    api_key: str
     timeout: int
 
     @classmethod
     def from_env(cls) -> "LLMConfig":
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY is required")
+
         return cls(
-            endpoint=os.getenv("LLM_ENDPOINT", "https://litellm-staging.gopay.sh"),
+            api_key=api_key,
             timeout=int(os.getenv("LLM_TIMEOUT", "300"))
         )
 
 
 @dataclass
-class RAGConfig:
-    """RAG Milvus configuration"""
-    db_path: str
-    embedding_endpoint: str
-    embedding_model: str
-    top_k: int
-
-    @classmethod
-    def from_env(cls) -> "RAGConfig":
-        return cls(
-            db_path=os.getenv("MILVUS_DB_PATH", "./milvus_demo_batch_bmth_v3_3.db"),
-            embedding_endpoint=os.getenv("EMBEDDING_ENDPOINT", "https://litellm-staging.gopay.sh/embeddings"),
-            embedding_model=os.getenv("EMBEDDING_MODEL", "GoToCompany/embeddinggemma-300m-gotoai-v1"),
-            top_k=int(os.getenv("RAG_TOP_K", "5"))
-        )
-
-    def is_configured(self) -> bool:
-        """Check if RAG database is available"""
-        return os.path.exists(self.db_path)
-
-
-@dataclass
 class Settings:
     """Global application settings"""
-    gitlab: GitLabConfig
+    github: GitHubConfig
     google_drive: GoogleDriveConfig
     llm: LLMConfig
-    rag: RAGConfig
 
     @classmethod
-    def load(cls, gitlab_token: Optional[str] = None, drive_token: Optional[str] = None) -> "Settings":
+    def load(cls, github_token: Optional[str] = None, drive_token: Optional[str] = None) -> "Settings":
         """Load all settings from environment or runtime parameters"""
         return cls(
-            gitlab=GitLabConfig.from_env(runtime_token=gitlab_token),
+            github=GitHubConfig.from_env(runtime_token=github_token),
             google_drive=GoogleDriveConfig.from_env(runtime_token=drive_token),
-            llm=LLMConfig.from_env(),
-            rag=RAGConfig.from_env()
+            llm=LLMConfig.from_env()
         )
 
 
@@ -102,9 +82,9 @@ class Settings:
 settings: Optional[Settings] = None
 
 
-def get_settings(gitlab_token: Optional[str] = None, drive_token: Optional[str] = None, force_reload: bool = False) -> Settings:
+def get_settings(github_token: Optional[str] = None, drive_token: Optional[str] = None, force_reload: bool = False) -> Settings:
     """Get or create global settings instance"""
     global settings
-    if settings is None or force_reload or gitlab_token or drive_token:
-        settings = Settings.load(gitlab_token=gitlab_token, drive_token=drive_token)
+    if settings is None or force_reload or github_token or drive_token:
+        settings = Settings.load(github_token=github_token, drive_token=drive_token)
     return settings

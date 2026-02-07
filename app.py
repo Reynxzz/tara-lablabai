@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from src.core.crew import DocumentationCrew, extract_markdown_from_response
 from src.utils.logger import setup_logger
-from src.utils.validators import validate_gitlab_project
+from src.utils.validators import validate_github_repo
 from src.config.settings import get_settings
 
 logger = setup_logger(__name__)
@@ -19,121 +19,130 @@ logger = setup_logger(__name__)
 # Initialize session state
 if 'authenticated' not in st.session_state:
     st.session_state.authenticated = False
-if 'gitlab_token' not in st.session_state:
-    st.session_state.gitlab_token = ""
+if 'github_token' not in st.session_state:
+    st.session_state.github_token = ""
 if 'drive_token' not in st.session_state:
     st.session_state.drive_token = ""
-if 'user_projects' not in st.session_state:
-    st.session_state.user_projects = []
-if 'gitlab_url' not in st.session_state:
-    st.session_state.gitlab_url = os.getenv("GITLAB_URL", "https://source.golabs.io")
+if 'user_repos' not in st.session_state:
+    st.session_state.user_repos = []
+if 'github_api_url' not in st.session_state:
+    st.session_state.github_api_url = os.getenv("GITHUB_API_URL", "https://api.github.com")
 
 
-def fetch_user_projects(gitlab_token: str, gitlab_url: str) -> List[Dict[str, Any]]:
+def fetch_user_repos(github_token: str, github_api_url: str) -> List[Dict[str, Any]]:
     """
-    Fetch all projects accessible by the user from GitLab API.
+    Fetch all repositories accessible by the user from GitHub API.
 
     Args:
-        gitlab_token: GitLab personal access token
-        gitlab_url: GitLab instance URL
+        github_token: GitHub personal access token
+        github_api_url: GitHub API URL
 
     Returns:
-        List of project dictionaries with id, name, and path_with_namespace
+        List of repository dictionaries with id, name, and full_name
     """
     try:
-        headers = {'PRIVATE-TOKEN': gitlab_token}
-        projects = []
+        headers = {
+            'Authorization': f'Bearer {github_token}',
+            'Accept': 'application/vnd.github.v3+json',
+            'X-GitHub-Api-Version': '2022-11-28'
+        }
+        repos = []
         page = 1
         per_page = 100
 
         while True:
-            url = f'{gitlab_url}/api/v4/projects'
+            url = f'{github_api_url}/user/repos'
             response = requests.get(
                 url,
                 headers=headers,
                 params={
-                    'membership': True,  # Only projects user is a member of
                     'per_page': per_page,
                     'page': page,
-                    'order_by': 'last_activity_at',
-                    'sort': 'desc'
+                    'sort': 'pushed',
+                    'direction': 'desc',
+                    'affiliation': 'owner,collaborator,organization_member'
                 },
                 timeout=30
             )
 
             if response.status_code != 200:
-                logger.error(f"Failed to fetch projects: HTTP {response.status_code} - {response.text[:200]}")
+                logger.error(f"Failed to fetch repos: HTTP {response.status_code} - {response.text[:200]}")
                 return []
 
             try:
-                page_projects = response.json()
+                page_repos = response.json()
             except Exception as e:
                 logger.error(f"Failed to parse JSON response: {e}")
                 return []
 
-            if not page_projects:
+            if not page_repos:
                 break
 
-            if not isinstance(page_projects, list):
-                logger.error(f"Unexpected response format: {type(page_projects)}")
+            if not isinstance(page_repos, list):
+                logger.error(f"Unexpected response format: {type(page_repos)}")
                 return []
 
-            for project in page_projects:
-                # Skip if project is None or doesn't have required fields
-                if not project or not isinstance(project, dict):
+            for repo in page_repos:
+                # Skip if repo is None or doesn't have required fields
+                if not repo or not isinstance(repo, dict):
                     continue
 
-                path_with_namespace = project.get('path_with_namespace')
-                if not path_with_namespace:
+                full_name = repo.get('full_name')
+                if not full_name:
                     continue
 
-                description = project.get('description', '') or ''
-                projects.append({
-                    'id': project.get('id'),
-                    'name': project.get('name'),
-                    'path_with_namespace': path_with_namespace,
-                    'description': description[:100] if description else '',  # Truncate description
-                    'last_activity_at': project.get('last_activity_at', '')
+                description = repo.get('description', '') or ''
+                repos.append({
+                    'id': repo.get('id'),
+                    'name': repo.get('name'),
+                    'full_name': full_name,
+                    'description': description[:100] if description else '',
+                    'pushed_at': repo.get('pushed_at', ''),
+                    'private': repo.get('private', False)
                 })
 
             # Check if there are more pages
-            if len(page_projects) < per_page:
+            if len(page_repos) < per_page:
                 break
             page += 1
 
-        logger.info(f"Fetched {len(projects)} projects for user")
-        return projects
+        logger.info(f"Fetched {len(repos)} repositories for user")
+        return repos
 
     except Exception as e:
-        logger.error(f"Error fetching user projects: {e}")
+        logger.error(f"Error fetching user repos: {e}")
         return []
 
 
-def verify_gitlab_token(gitlab_token: str, gitlab_url: str) -> bool:
+def verify_github_token(github_token: str, github_api_url: str) -> bool:
     """
-    Verify if the GitLab token is valid by making a test API call.
+    Verify if the GitHub token is valid by making a test API call.
 
     Args:
-        gitlab_token: GitLab personal access token
-        gitlab_url: GitLab instance URL
+        github_token: GitHub personal access token
+        github_api_url: GitHub API URL
 
     Returns:
         True if token is valid, False otherwise
     """
     try:
-        headers = {'PRIVATE-TOKEN': gitlab_token}
-        url = f'{gitlab_url}/api/v4/user'
+        headers = {
+            'Authorization': f'Bearer {github_token}',
+            'Accept': 'application/vnd.github.v3+json',
+            'X-GitHub-Api-Version': '2022-11-28'
+        }
+        url = f'{github_api_url}/user'
         response = requests.get(url, headers=headers, timeout=10)
         return response.status_code == 200
     except Exception as e:
-        logger.error(f"Error verifying GitLab token: {e}")
+        logger.error(f"Error verifying GitHub token: {e}")
         return False
 
 
 # Page configuration
 st.set_page_config(
     page_title="NoBuddy",
-    page_icon="🟢",
+    page_icon="",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -205,24 +214,24 @@ st.markdown("""
 
 # Header
 st.markdown('<div class="main-header">NoBuddy - Your Onboarding Buddy</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Your team’s knowledge, instantly searchable for easy project onboarding. Turns "nobody knows" into "NoBuddy knows".</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Your team\'s knowledge, instantly searchable for easy project onboarding. Turns "nobody knows" into "NoBuddy knows".</div>', unsafe_allow_html=True)
 st.markdown('<div class="header-line"></div>', unsafe_allow_html=True)
 
 # Login page - shown if not authenticated
 if not st.session_state.authenticated:
     st.markdown("---")
     st.markdown("### Authentication")
-    st.markdown('<div class="info-box">Please enter your GitLab token and optionally your Google Drive token to get started.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="info-box">Please enter your GitHub token and optionally your Google Drive token to get started.</div>', unsafe_allow_html=True)
 
     col1, col2 = st.columns(2)
 
     with col1:
-        st.markdown("#### GitLab Authentication")
-        gitlab_token_input = st.text_input(
-            "GitLab Personal Access Token",
+        st.markdown("#### GitHub Authentication")
+        github_token_input = st.text_input(
+            "GitHub Personal Access Token",
             type="password",
-            placeholder="glpat-xxxxxxxxxxxxxxxxxxxx",
-            help="Enter your GitLab personal access token. This token will be used to fetch your accessible projects."
+            placeholder="ghp_xxxxxxxxxxxxxxxxxxxx",
+            help="Enter your GitHub personal access token. This token will be used to fetch your accessible repositories."
         )
 
     with col2:
@@ -234,35 +243,37 @@ if not st.session_state.authenticated:
             help="Optional: Enter your Google Drive token to enable Drive search integration."
         )
 
-    if st.button("Login and Load Projects", type="primary", use_container_width=True):
-        if not gitlab_token_input:
-            st.error("✗ GitLab token is required")
+    if st.button("Login and Load Repositories", type="primary", use_container_width=True):
+        if not github_token_input:
+            st.error("GitHub token is required")
         else:
-            with st.spinner("Verifying GitLab token and fetching your projects..."):
-                # Verify GitLab token
-                if not verify_gitlab_token(gitlab_token_input, st.session_state.gitlab_url):
-                    st.error("✗ Invalid GitLab token. Please check your token and try again.")
+            with st.spinner("Verifying GitHub token and fetching your repositories..."):
+                # Verify GitHub token
+                if not verify_github_token(github_token_input, st.session_state.github_api_url):
+                    st.error("Invalid GitHub token. Please check your token and try again.")
                 else:
-                    # Fetch user projects
-                    projects = fetch_user_projects(gitlab_token_input, st.session_state.gitlab_url)
+                    # Fetch user repositories
+                    repos = fetch_user_repos(github_token_input, st.session_state.github_api_url)
 
-                    if not projects:
-                        st.warning("No projects found or error fetching projects. Please check your token permissions.")
+                    if not repos:
+                        st.warning("No repositories found or error fetching repositories. Please check your token permissions.")
                     else:
-                        # Store tokens and projects in session state
-                        st.session_state.gitlab_token = gitlab_token_input
+                        # Store tokens and repos in session state
+                        st.session_state.github_token = github_token_input
                         st.session_state.drive_token = drive_token_input
-                        st.session_state.user_projects = projects
+                        st.session_state.user_repos = repos
                         st.session_state.authenticated = True
-                        st.success(f"✓ Successfully authenticated. Found {len(projects)} accessible projects.")
+                        st.success(f"Successfully authenticated. Found {len(repos)} accessible repositories.")
                         st.rerun()
 
     st.markdown("---")
     st.markdown("""
-    **How to get your GitLab Personal Access Token:**
-    1. Go to your GitLab instance → User Settings → Access Tokens
-    2. Create a new token with `read_api` and `read_repository` scopes
-    3. Copy the token and paste it above
+    **How to get your GitHub Personal Access Token:**
+    1. Go to GitHub -> Settings -> Developer settings -> Personal access tokens -> Tokens (classic)
+    2. Click "Generate new token (classic)"
+    3. Give it a name and select scopes: `repo` (for private repos) or `public_repo` (for public only)
+    4. Click "Generate token"
+    5. Copy the token and paste it above
     """)
 
     # Stop rendering the rest of the page
@@ -274,52 +285,46 @@ with st.sidebar:
 
     # User info and logout
     st.markdown("### User Session")
-    st.markdown('<div class="success-box" style="margin: 0; padding: 0.5rem;">✓ Authenticated</div>', unsafe_allow_html=True)
-    if st.button("Logout ⏻", use_container_width=True):
+    st.markdown('<div class="success-box" style="margin: 0; padding: 0.5rem;">Authenticated</div>', unsafe_allow_html=True)
+    if st.button("Logout", use_container_width=True):
         st.session_state.authenticated = False
-        st.session_state.gitlab_token = ""
+        st.session_state.github_token = ""
         st.session_state.drive_token = ""
-        st.session_state.user_projects = []
+        st.session_state.user_repos = []
         st.rerun()
 
-    st.markdown("### Project Settings")
+    st.markdown("### Repository Settings")
 
-    # Create a searchable list of projects
-    if st.session_state.user_projects:
+    # Create a searchable list of repositories
+    if st.session_state.user_repos:
         # Create options for selectbox
-        project_options = [""] + [p['path_with_namespace'] for p in st.session_state.user_projects]
-        project_names = ["-- Select a project --"] + [
-            f"{p['path_with_namespace']}" + (f" - {p['description'][:50]}..." if p['description'] else "")
-            for p in st.session_state.user_projects
+        repo_options = [""] + [r['full_name'] for r in st.session_state.user_repos]
+        repo_names = ["-- Select a repository --"] + [
+            f"{r['full_name']}" + (" (private)" if r['private'] else "") + (f" - {r['description'][:40]}..." if r['description'] else "")
+            for r in st.session_state.user_repos
         ]
 
         # Searchable selectbox
         selected_index = st.selectbox(
-            "Select GitLab Project",
-            range(len(project_options)),
-            format_func=lambda i: project_names[i],
-            help="Search and select a project from your accessible projects"
+            "Select GitHub Repository",
+            range(len(repo_options)),
+            format_func=lambda i: repo_names[i],
+            help="Search and select a repository from your accessible repositories"
         )
 
-        project_input = project_options[selected_index]
+        repo_input = repo_options[selected_index]
 
-        # Show project count
-        st.caption(f"{len(st.session_state.user_projects)} projects available")
+        # Show repo count
+        st.caption(f"{len(st.session_state.user_repos)} repositories available")
     else:
-        st.warning("No projects loaded. Please logout and login again.")
-        project_input = ""
+        st.warning("No repositories loaded. Please logout and login again.")
+        repo_input = ""
 
     st.markdown("### Integration Options")
     enable_drive = st.checkbox(
         "Enable Google Drive Search",
         value=False,
         help="Search Google Drive for reference documentation"
-    )
-
-    enable_rag = st.checkbox(
-        "Enable Internal Knowledge Base",
-        value=False,
-        help="Search internal Milvus knowledge base for relevant information"
     )
 
     st.markdown("### Output Settings")
@@ -333,13 +338,12 @@ with st.sidebar:
     st.markdown("### About")
     st.markdown("""
     This tool uses a **dual-LLM architecture**:
-    - GPT OSS 120B: For tool calling and data fetching
-    - Sahabat AI 70B: For learning path writing
+    - GPT-4o-mini: For tool calling and data fetching
+    - GPT-4o: For learning path writing
 
     **Agents:**
-    - GitLab Data Analyzer (fetches code & snippets)
+    - GitHub Data Analyzer (fetches code & snippets)
     - Google Drive Analyzer (extracts key points)
-    - Internal KB Analyzer (searches knowledge base)
     - Learning Path Writer (creates guided path)
     """)
 
@@ -392,39 +396,36 @@ with col1:
     st.markdown("### Generate Learning Path")
 
     # Validation feedback
-    if project_input:
-        if validate_gitlab_project(project_input):
-            st.markdown(f'<div class="success-box">✓ Valid project format: <strong>{project_input}</strong></div>', unsafe_allow_html=True)
+    if repo_input:
+        if validate_github_repo(repo_input):
+            st.markdown(f'<div class="success-box">Valid repository format: <strong>{repo_input}</strong></div>', unsafe_allow_html=True)
         else:
-            st.error("✗ Invalid project format. Expected: namespace/project-name")
+            st.error("Invalid repository format. Expected: owner/repo-name")
 
     # Generate button
     generate_button = st.button("Generate Learning Path", type="primary", use_container_width=True)
 
 with col2:
     st.markdown("### Agent Status")
-    agent_count = 2  # Minimum: GitLab + Writer
+    agent_count = 2  # Minimum: GitHub + Writer
     if enable_drive:
-        agent_count += 1
-    if enable_rag:
         agent_count += 1
 
     st.markdown(f'<div class="metric-card"><h2 style="color: #4CAF50; margin: 0;">{agent_count}</h2><p style="margin: 0; color: #5a6c57;">Active Agents</p></div>', unsafe_allow_html=True)
     st.markdown("")
     st.markdown(f"""
     **Enabled Agents:**
-    - {'✓' if True else '✗'} GitLab Data Analyzer
-    - {'✓' if enable_drive else '✗'} Google Drive Analyzer
-    - {'✓' if enable_rag else '✗'} Internal KB Analyzer
-    - {'✓' if True else '✗'} Learning Path Writer
+    - {'Y' if True else 'X'} GitHub Data Analyzer
+    - {'Y' if enable_drive else 'X'} Google Drive Analyzer
+    - {'Y' if True else 'X'} Learning Path Writer
     """)
 
 # Learning path generation
 if generate_button:
-    if not project_input:
-        st.error("✗ Please select a GitLab project")
-    elif not validate_gitlab_project(project_input):
-        st.error("✗ Invalid project format. Expected: namespace/project-name")
+    if not repo_input:
+        st.error("Please select a GitHub repository")
+    elif not validate_github_repo(repo_input):
+        st.error("Invalid repository format. Expected: owner/repo-name")
     else:
         try:
             # Progress container
@@ -440,23 +441,27 @@ if generate_button:
                 progress_bar.progress(10)
 
                 # Configure settings with runtime tokens
+                # Set environment variables for OpenAI
+                os.environ["GITHUB_TOKEN"] = st.session_state.github_token
+                if st.session_state.drive_token:
+                    os.environ["GOOGLE_DRIVE_TOKEN"] = st.session_state.drive_token
+
                 get_settings(
-                    gitlab_token=st.session_state.gitlab_token,
+                    github_token=st.session_state.github_token,
                     drive_token=st.session_state.drive_token if enable_drive else None,
                     force_reload=True
                 )
 
                 doc_crew = DocumentationCrew(
-                    enable_google_drive=enable_drive,
-                    enable_rag=enable_rag
+                    enable_google_drive=enable_drive
                 )
 
                 # Generate learning path
-                status_text.text(f"Generating learning path for {project_input}...")
+                status_text.text(f"Generating learning path for {repo_input}...")
                 progress_bar.progress(30)
 
                 with st.spinner(f"Agents are collaborating to create your learning path..."):
-                    documentation = doc_crew.generate_documentation(project_input)
+                    documentation = doc_crew.generate_documentation(repo_input)
 
                 progress_bar.progress(80)
                 status_text.text("Saving learning path...")
@@ -468,10 +473,10 @@ if generate_button:
                 )
 
                 progress_bar.progress(100)
-                status_text.text("✓ Learning path generated successfully")
+                status_text.text("Learning path generated successfully")
 
                 # Success message
-                st.markdown(f'<div class="success-box">✓ <strong>Learning path saved to:</strong> {output_path}</div>', unsafe_allow_html=True)
+                st.markdown(f'<div class="success-box"><strong>Learning path saved to:</strong> {output_path}</div>', unsafe_allow_html=True)
 
                 # Display learning path
                 st.markdown("---")
@@ -496,18 +501,18 @@ if generate_button:
                     st.info(f"File also saved locally at: `{output_path}`")
 
         except ValueError as e:
-            st.error(f"✗ Validation Error: {str(e)}")
+            st.error(f"Validation Error: {str(e)}")
             logger.error(f"Validation error: {e}")
 
         except Exception as e:
-            st.error(f"✗ Error generating learning path: {str(e)}")
+            st.error(f"Error generating learning path: {str(e)}")
             logger.error(f"Error generating learning path: {e}", exc_info=True)
 
             with st.expander("Error Details"):
                 st.code(str(e))
 
-# Code Q&A Section (only show if user has selected a project)
-if project_input and validate_gitlab_project(project_input):
+# Code Q&A Section (only show if user has selected a repository)
+if repo_input and validate_github_repo(repo_input):
     st.markdown("---")
     st.markdown("### Ask Questions About the Code")
     st.markdown("Deep dive into the repository code to understand specific aspects like feature processing, architecture, or implementation details.")
@@ -534,31 +539,32 @@ if project_input and validate_gitlab_project(project_input):
 
     if ask_button:
         if not question_input:
-            st.error("✗ Please enter a question")
+            st.error("Please enter a question")
         else:
             try:
                 with st.spinner(f"Analyzing code in {directory_input}/ to answer your question..."):
                     # Configure settings with runtime tokens
+                    os.environ["GITHUB_TOKEN"] = st.session_state.github_token
+
                     get_settings(
-                        gitlab_token=st.session_state.gitlab_token,
+                        github_token=st.session_state.github_token,
                         drive_token=None,
                         force_reload=True
                     )
 
                     # Create crew instance
                     doc_crew = DocumentationCrew(
-                        enable_google_drive=False,
-                        enable_rag=False
+                        enable_google_drive=False
                     )
 
                     # Get answer
                     qa_result = doc_crew.answer_code_question(
-                        project=project_input,
+                        repo=repo_input,
                         question=question_input,
                         directory=directory_input
                     )
 
-                st.success("✓ Question answered successfully")
+                st.success("Question answered successfully")
 
                 # Display answer
                 st.markdown("#### Answer")
@@ -566,16 +572,16 @@ if project_input and validate_gitlab_project(project_input):
 
                 # Show metadata
                 with st.expander("Query Details"):
-                    st.write(f"**Project:** {qa_result.get('project')}")
+                    st.write(f"**Repository:** {qa_result.get('repository')}")
                     st.write(f"**Directory Searched:** {qa_result.get('directory')}/")
                     st.write(f"**Question:** {qa_result.get('question')}")
 
             except ValueError as e:
-                st.error(f"✗ Validation Error: {str(e)}")
+                st.error(f"Validation Error: {str(e)}")
                 logger.error(f"Validation error in Code Q&A: {e}")
 
             except Exception as e:
-                st.error(f"✗ Error answering question: {str(e)}")
+                st.error(f"Error answering question: {str(e)}")
                 logger.error(f"Error in Code Q&A: {e}", exc_info=True)
 
                 with st.expander("Error Details"):
@@ -585,6 +591,6 @@ if project_input and validate_gitlab_project(project_input):
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #5a6c57; padding: 1rem; font-size: 0.9rem;">
-    Built for GoTo Hackathon 2025 by Bring Me The Hackathon.
+    NoBuddy - AI-powered Learning Path Generator
 </div>
 """, unsafe_allow_html=True)

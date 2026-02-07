@@ -3,22 +3,24 @@ import re
 from typing import Optional
 
 
-def validate_gitlab_project(project: str) -> bool:
+def validate_github_repo(repo: str) -> bool:
     """
-    Validate GitLab project format (namespace/project).
+    Validate GitHub repository format (owner/repo).
 
     Args:
-        project: Project string to validate
+        repo: Repository string to validate
 
     Returns:
         True if valid, False otherwise
     """
-    if not project:
+    if not repo:
         return False
 
-    # GitLab project format: namespace/project or namespace/subgroup/project
-    pattern = r'^[\w\-\.]+(/[\w\-\.]+)+$'
-    return bool(re.match(pattern, project))
+    # GitHub repo format: owner/repo
+    # Owner and repo can contain alphanumeric, hyphens, and underscores
+    # Owner cannot start with hyphen
+    pattern = r'^[a-zA-Z0-9][a-zA-Z0-9_-]*/[a-zA-Z0-9][a-zA-Z0-9_.-]*$'
+    return bool(re.match(pattern, repo))
 
 
 def validate_url(url: str) -> bool:
