@@ -337,14 +337,11 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("### About")
     st.markdown("""
-    This tool uses a **dual-LLM architecture**:
-    - GPT-4o-mini: For tool calling and data fetching
-    - GPT-4o: For learning path writing
+    **Powered by GPT-4o**
 
     **Agents:**
-    - GitHub Data Analyzer (fetches code & snippets)
-    - Google Drive Analyzer (extracts key points)
-    - Learning Path Writer (creates guided path)
+    - GitHub Data Fetcher
+    - Learning Path Writer
     """)
 
 # File viewer section

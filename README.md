@@ -52,11 +52,10 @@ python scripts/run_documentation_agent.py owner/repo --with-drive
 
 ## How It Works
 
-TARA uses a multi-agent system with CrewAI:
+TARA uses a multi-agent system powered by GPT-4o:
 
-1. **GitHub Analyzer** (GPT-4o-mini) - Fetches repository data
-2. **Drive Analyzer** (GPT-4o-mini) - Searches Google Drive (optional)
-3. **Learning Path Writer** (GPT-4o) - Generates the learning path
+1. **GitHub Data Fetcher** - Fetches repository data using the GitHub API
+2. **Learning Path Writer** - Formats the data into a readable learning path
 
 ## License
 
