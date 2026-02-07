@@ -28,10 +28,11 @@ class GitHubCodeQATool(BaseTool):
     name: str = "GitHub Code Q&A"
     description: str = (
         "ONLY FOR ANSWERING SPECIFIC CODE QUESTIONS - NOT FOR LEARNING PATH GENERATION. "
-        "This tool answers specific questions about repository code by deep-diving into Python files. "
+        "This tool answers specific questions about repository code by deep-diving into code files. "
+        "Supports Python, JavaScript, TypeScript, Go, Java, and many other languages. "
         "DO NOT use this tool for learning path generation - use 'GitHub Project Analyzer' instead. "
         "ONLY use this when a user asks a specific question like 'What feature processing does this do?' "
-        "Input requires: repo path, question, and optional directory (default: src). "
+        "Input requires: repo path, question, and optional directory (default: src, use '.' for root). "
         "Returns: code files with full content and links for answering the specific question asked."
     )
     args_schema: Type[BaseModel] = GitHubCodeQAToolSchema

@@ -207,6 +207,15 @@ st.markdown("""
         height: 3px;
         background: linear-gradient(90deg, #4CAF50 0%, #81c784 100%);
         margin: 1rem 0 2rem 0;
+    }
+    /* Chat styling */
+    .stChatMessage {
+        background-color: #f8fdf9;
+        border-radius: 8px;
+        margin-bottom: 0.5rem;
+    }
+    .stChatInput > div {
+        border-color: #4CAF50 !important;
         border-radius: 2px;
     }
 </style>
@@ -508,81 +517,100 @@ if generate_button:
             with st.expander("Error Details"):
                 st.code(str(e))
 
-# Code Q&A Section (only show if user has selected a repository)
+# Code Chat Section (only show if user has selected a repository)
 if repo_input and validate_github_repo(repo_input):
     st.markdown("---")
-    st.markdown("### Ask Questions About the Code")
-    st.markdown("Deep dive into the repository code to understand specific aspects like feature processing, architecture, or implementation details.")
+    st.markdown("### Chat with the Code")
+    st.markdown(f"Ask questions about **{repo_input}** - I'll analyze the code and help you understand it.")
 
-    with st.form("code_qa_form"):
-        col_q1, col_q2 = st.columns([3, 1])
+    # Initialize chat history for this repo
+    chat_key = f"chat_history_{repo_input.replace('/', '_')}"
+    if chat_key not in st.session_state:
+        st.session_state[chat_key] = []
 
-        with col_q1:
-            question_input = st.text_area(
-                "Your Question",
-                placeholder="e.g., What feature processing does this project do?",
-                help="Ask specific questions about the codebase implementation",
-                height=100
-            )
+    # Directory selector in a small expander
+    with st.expander("Settings", expanded=False):
+        code_directory = st.text_input(
+            "Directory to search",
+            value=".",
+            help="Which directory to look for code (e.g., src, lib, . for root)"
+        )
+        if st.button("Clear Chat History"):
+            st.session_state[chat_key] = []
+            st.rerun()
 
-        with col_q2:
-            directory_input = st.text_input(
-                "Directory",
-                value="src",
-                help="Directory to search (default: src)"
-            )
+    # Handle pending question from button click (before displaying history)
+    pending_key = f"pending_question_{chat_key}"
+    if pending_key in st.session_state and st.session_state[pending_key]:
+        pending_q = st.session_state[pending_key]
+        st.session_state[pending_key] = None
 
-        ask_button = st.form_submit_button("Ask Question", type="primary", use_container_width=True)
+        # Add user message
+        st.session_state[chat_key].append({"role": "user", "content": pending_q})
 
-    if ask_button:
-        if not question_input:
-            st.error("Please enter a question")
-        else:
+        # Get AI response with loading indicator
+        with st.spinner("Analyzing code..."):
             try:
-                with st.spinner(f"Analyzing code in {directory_input}/ to answer your question..."):
-                    # Configure settings with runtime tokens
-                    os.environ["GITHUB_TOKEN"] = st.session_state.github_token
-
-                    get_settings(
-                        github_token=st.session_state.github_token,
-                        drive_token=None,
-                        force_reload=True
-                    )
-
-                    # Create crew instance
-                    doc_crew = DocumentationCrew(
-                        enable_google_drive=False
-                    )
-
-                    # Get answer
-                    qa_result = doc_crew.answer_code_question(
-                        repo=repo_input,
-                        question=question_input,
-                        directory=directory_input
-                    )
-
-                st.success("Question answered successfully")
-
-                # Display answer
-                st.markdown("#### Answer")
-                st.markdown(qa_result.get("answer", ""), unsafe_allow_html=False)
-
-                # Show metadata
-                with st.expander("Query Details"):
-                    st.write(f"**Repository:** {qa_result.get('repository')}")
-                    st.write(f"**Directory Searched:** {qa_result.get('directory')}/")
-                    st.write(f"**Question:** {qa_result.get('question')}")
-
-            except ValueError as e:
-                st.error(f"Validation Error: {str(e)}")
-                logger.error(f"Validation error in Code Q&A: {e}")
-
+                os.environ["GITHUB_TOKEN"] = st.session_state.github_token
+                get_settings(github_token=st.session_state.github_token, drive_token=None, force_reload=True)
+                doc_crew = DocumentationCrew(enable_google_drive=False)
+                qa_result = doc_crew.answer_code_question(
+                    repo=repo_input,
+                    question=pending_q,
+                    directory=code_directory,
+                    chat_history=st.session_state[chat_key][:-1]  # Exclude the question we just added
+                )
+                answer = qa_result.get("answer", "Sorry, I couldn't analyze the code.")
+                st.session_state[chat_key].append({"role": "assistant", "content": answer})
             except Exception as e:
-                st.error(f"Error answering question: {str(e)}")
-                logger.error(f"Error in Code Q&A: {e}", exc_info=True)
+                st.session_state[chat_key].append({"role": "assistant", "content": f"Error: {str(e)}"})
 
-                with st.expander("Error Details"):
-                    st.code(str(e))
+    # Display chat history
+    for message in st.session_state[chat_key]:
+        if message["role"] == "user":
+            st.chat_message("user").markdown(message["content"])
+        else:
+            st.chat_message("assistant").markdown(message["content"])
+
+    # Example questions as clickable buttons (only show if no history)
+    if not st.session_state[chat_key]:
+        st.markdown("**Quick questions:**")
+        example_cols = st.columns(2)
+        examples = [
+            ("What does this project do?", "Explain the entry point"),
+            ("How is the code structured?", "What dependencies are used?")
+        ]
+        for col_idx, col in enumerate(example_cols):
+            with col:
+                for row_idx in range(2):
+                    example = examples[row_idx][col_idx]
+                    if st.button(example, key=f"example_{col_idx}_{row_idx}", use_container_width=True):
+                        st.session_state[pending_key] = example
+                        st.rerun()
+
+    # Chat input at the bottom
+    if prompt := st.chat_input("Ask about the code..."):
+        # Add user message to history
+        st.session_state[chat_key].append({"role": "user", "content": prompt})
+
+        # Get AI response
+        with st.spinner("Analyzing code..."):
+            try:
+                os.environ["GITHUB_TOKEN"] = st.session_state.github_token
+                get_settings(github_token=st.session_state.github_token, drive_token=None, force_reload=True)
+                doc_crew = DocumentationCrew(enable_google_drive=False)
+                qa_result = doc_crew.answer_code_question(
+                    repo=repo_input,
+                    question=prompt,
+                    directory=code_directory,
+                    chat_history=st.session_state[chat_key][:-1]  # Pass history excluding current question
+                )
+                answer = qa_result.get("answer", "Sorry, I couldn't analyze the code.")
+                st.session_state[chat_key].append({"role": "assistant", "content": answer})
+            except Exception as e:
+                st.session_state[chat_key].append({"role": "assistant", "content": f"Error: {str(e)}"})
+
+        st.rerun()
 
 # Footer
 st.markdown("---")

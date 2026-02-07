@@ -390,21 +390,48 @@ class GitHubTool(BaseTool):
 
             tree = response.json().get("tree", [])
 
-            # Filter for Python files in the specified directory
-            python_files = [
-                item for item in tree
-                if item.get('type') == 'blob'
-                and item.get('path', '').startswith(f"{directory}/")
-                and item.get('path', '').endswith('.py')
-            ]
+            # Supported code file extensions
+            code_extensions = (
+                '.py', '.js', '.ts', '.jsx', '.tsx',  # Python, JavaScript, TypeScript
+                '.java', '.kt', '.scala',              # JVM languages
+                '.go', '.rs', '.rb',                   # Go, Rust, Ruby
+                '.php', '.c', '.cpp', '.h', '.hpp',    # PHP, C/C++
+                '.cs', '.swift', '.m',                 # C#, Swift, Objective-C
+                '.sql', '.sh', '.bash',                # SQL, Shell
+                '.yaml', '.yml', '.json', '.toml',     # Config files
+                '.md', '.rst', '.txt',                 # Documentation
+                '.html', '.css', '.scss',              # Web files
+            )
 
-            if not python_files:
-                logger.info(f"No Python files found in {directory}/")
-                return {"message": f"No Python files found in {directory}/"}
+            # Handle root directory
+            is_root = directory in ('.', '', '/')
+
+            # Filter for code files in the specified directory
+            code_files_list = []
+            for item in tree:
+                if item.get('type') != 'blob':
+                    continue
+
+                path = item.get('path', '')
+
+                # Check if file has a supported extension
+                if not any(path.endswith(ext) for ext in code_extensions):
+                    continue
+
+                # Check directory match
+                if is_root:
+                    # For root, include files at root level or in any subdirectory
+                    code_files_list.append(item)
+                elif path.startswith(f"{directory}/"):
+                    code_files_list.append(item)
+
+            if not code_files_list:
+                logger.info(f"No code files found in {directory}/")
+                return {"message": f"No code files found in {directory}/"}
 
             # Fetch content of files (limit to max_files)
             code_files = {}
-            for file_item in python_files[:max_files]:
+            for file_item in code_files_list[:max_files]:
                 file_path = file_item.get('path')
                 file_name = file_path.split('/')[-1]
 

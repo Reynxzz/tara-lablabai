@@ -173,23 +173,53 @@ Use ONLY data from the previous task. Do not invent anything.""",
         logger.info(f"Learning path saved to {output_file}")
         return output_file
 
-    def answer_code_question(self, repo: str, question: str, directory: str = "src") -> Dict:
-        """Answer a specific question about the repository code."""
+    def answer_code_question(
+        self,
+        repo: str,
+        question: str,
+        directory: str = ".",
+        chat_history: Optional[List[Dict]] = None
+    ) -> Dict:
+        """
+        Answer a question about the repository code in a conversational way.
+
+        Args:
+            repo: GitHub repository in format 'owner/repo'
+            question: The user's question
+            directory: Directory to search for code
+            chat_history: List of previous messages [{"role": "user/assistant", "content": "..."}]
+        """
         if not validate_github_repo(repo):
             raise ValueError(f"Invalid repository format: {repo}. Expected format: owner/repo")
 
         logger.info("=" * 60)
-        logger.info(f"Code Q&A for repository: {repo}")
+        logger.info(f"Code Chat for repository: {repo}")
         logger.info(f"Question: {question}")
         logger.info(f"Directory: {directory}/")
         logger.info("=" * 60)
 
         code_qa_tool = GitHubCodeQATool()
 
+        # Build conversation context
+        context_str = ""
+        if chat_history and len(chat_history) > 0:
+            context_str = "\n\nPREVIOUS CONVERSATION:\n"
+            for msg in chat_history[-6:]:  # Last 6 messages for context
+                role = "User" if msg["role"] == "user" else "Assistant"
+                content = msg["content"][:500]  # Truncate long messages
+                context_str += f"{role}: {content}\n"
+            context_str += "\nUse this context to understand follow-up questions.\n"
+
         code_qa_agent = Agent(
-            role="Code Analyzer",
-            goal="Fetch code and answer questions about it",
-            backstory="You analyze code. Use the GitHub Code Q&A tool to fetch code, then answer the question based on what you find.",
+            role="Code Assistant",
+            goal="Help users understand the codebase through conversation",
+            backstory="""You are a friendly code assistant that helps developers understand codebases.
+You have a conversation with the user, answering their questions about the code.
+Use the GitHub Code Q&A tool to fetch actual code, then explain it clearly.
+For project structure questions, use directory="." to search from the root.
+If no files are found, try different directories like "src", "app", or "lib".
+For follow-up questions, refer to the previous conversation context.
+Be concise but helpful. Use code examples when relevant.""",
             tools=[code_qa_tool],
             llm=self.model,
             verbose=True,
@@ -197,13 +227,17 @@ Use ONLY data from the previous task. Do not invent anything.""",
         )
 
         qa_task = Task(
-            description=f"""Use the GitHub Code Q&A tool with:
-- repo: {repo}
-- question: {question}
-- directory: {directory}
+            description=f"""You are chatting with a user about the repository: {repo}
+{context_str}
+USER'S CURRENT QUESTION: {question}
 
-Then answer the question based on the code returned. Quote specific code in your answer.""",
-            expected_output="An answer to the question with code examples from the repository",
+Instructions:
+1. Use the GitHub Code Q&A tool to fetch code from the "{directory}" directory
+2. Answer the user's question based on the actual code
+3. If this is a follow-up question, use the conversation context
+4. Quote relevant code snippets in your answer
+5. Be conversational and helpful""",
+            expected_output="A helpful, conversational answer about the code with examples",
             agent=code_qa_agent
         )
 
@@ -214,7 +248,7 @@ Then answer the question based on the code returned. Quote specific code in your
             verbose=True
         )
 
-        logger.info("Executing Code Q&A agent...")
+        logger.info("Executing Code Chat agent...")
         result = crew.kickoff()
 
         return {

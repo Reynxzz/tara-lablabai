@@ -126,11 +126,12 @@ def create_code_qa_agent(llm: OpenAILLM, code_qa_tool: GitHubCodeQATool) -> Agen
         backstory=(
             'You answer questions about code. Your process:\n'
             '1. Call the "GitHub Code Q&A" tool to fetch code files\n'
-            '2. Read the code returned by the tool\n'
-            '3. Answer the question using ONLY that code\n'
-            '4. Quote the actual code in your answer\n'
-            '5. Include file links from the tool response\n\n'
-            'If the tool returns no code, say "No code found in that directory".\n'
+            '2. For project structure questions, use directory="." to search from root\n'
+            '3. Read the code returned by the tool\n'
+            '4. Answer the question using ONLY that code\n'
+            '5. Quote the actual code in your answer\n'
+            '6. Include file links from the tool response\n\n'
+            'If the tool returns no code, try a different directory (e.g., ".", "src", "app").\n'
             'Do NOT make up code or assume what the code does.'
         ),
         tools=[code_qa_tool],
