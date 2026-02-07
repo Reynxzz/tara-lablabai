@@ -1,4 +1,4 @@
-"""Streamlit web interface for NoBuddy - Documentation Generator"""
+"""Streamlit web interface for TARA - Learning Path Generator"""
 import streamlit as st
 import sys
 import os
@@ -141,7 +141,7 @@ def verify_github_token(github_token: str, github_api_url: str) -> bool:
 
 # Page configuration
 st.set_page_config(
-    page_title="NoBuddy",
+    page_title="TARA",
     page_icon="",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -213,8 +213,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Header
-st.markdown('<div class="main-header">NoBuddy - Your Onboarding Buddy</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Your team\'s knowledge, instantly searchable for easy project onboarding. Turns "nobody knows" into "NoBuddy knows".</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">TARA - Your Onboarding Buddy</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">AI-powered Learning Path Generator for easy project onboarding.</div>', unsafe_allow_html=True)
 st.markdown('<div class="header-line"></div>', unsafe_allow_html=True)
 
 # Login page - shown if not authenticated
@@ -591,6 +591,6 @@ if repo_input and validate_github_repo(repo_input):
 st.markdown("---")
 st.markdown("""
 <div style="text-align: center; color: #5a6c57; padding: 1rem; font-size: 0.9rem;">
-    NoBuddy - AI-powered Learning Path Generator
+    TARA - AI-powered Learning Path Generator
 </div>
 """, unsafe_allow_html=True)

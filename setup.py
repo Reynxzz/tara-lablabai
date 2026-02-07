@@ -18,20 +18,20 @@ if requirements_file.exists():
         ]
 
 setup(
-    name="nobuddy",
-    version="2.0.0",
+    name="tara",
+    version="1.0.0",
     description="AI-powered learning path generator for GitHub projects",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    author="NoBuddy Team",
-    author_email="nobuddy@example.com",
-    url="https://github.com/nobuddy-team/nobuddy",
+    author="TARA Team",
+    author_email="tara@example.com",
+    url="https://github.com/Reynxzz/tara-lablabai",
     packages=find_packages(include=["src", "src.*"]),
     python_requires=">=3.8",
     install_requires=requirements,
     entry_points={
         'console_scripts': [
-            'nobuddy=scripts.run_documentation_agent:main',
+            'tara=scripts.run_documentation_agent:main',
         ],
     },
     classifiers=[
@@ -46,7 +46,7 @@ setup(
     ],
     keywords="documentation ai crewai github automation openai",
     project_urls={
-        "Bug Reports": "https://github.com/nobuddy-team/nobuddy/issues",
-        "Source": "https://github.com/nobuddy-team/nobuddy",
+        "Bug Reports": "https://github.com/Reynxzz/tara-lablabai/issues",
+        "Source": "https://github.com/Reynxzz/tara-lablabai",
     },
 )
